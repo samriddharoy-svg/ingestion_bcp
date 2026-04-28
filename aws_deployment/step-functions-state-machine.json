@@ -1,0 +1,147 @@
+{
+  "Comment": "Stock Data Pipeline: API Fetch → SQLite → RDS PostgreSQL",
+  "StartAt": "FetchAPIData",
+  "States": {
+    "FetchAPIData": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:FetchStocksData",
+      "Comment": "Phase 1: Fetch data from Yahoo Finance and FMP APIs to SQLite",
+      "TimeoutSeconds": 900,
+      "HeartbeatSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0,
+          "Comment": "Retry up to 2 times with exponential backoff"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "CheckFetchStatus"
+    },
+    "CheckFetchStatus": {
+      "Type": "Choice",
+      "Comment": "Check if API fetch succeeded or partially succeeded",
+      "Choices": [
+        {
+          "Variable": "$.status",
+          "StringEquals": "SUCCESS",
+          "Comment": "Full success - proceed to RDS ingestion",
+          "Next": "IngestToRDS"
+        },
+        {
+          "Variable": "$.status",
+          "StringEquals": "PARTIAL_SUCCESS",
+          "Comment": "Partial success (some scripts failed) - still proceed to RDS if we have stocks and prices",
+          "Next": "CheckMinimumData"
+        }
+      ],
+      "Default": "NotifyFailure"
+    },
+    "CheckMinimumData": {
+      "Type": "Choice",
+      "Comment": "Check if we have minimum required data (stocks and prices)",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.fetch.stocks_count",
+              "NumericGreaterThan": 0
+            },
+            {
+              "Variable": "$.fetch.prices_count",
+              "NumericGreaterThan": 0
+            }
+          ],
+          "Comment": "We have stocks and prices - safe to proceed to RDS",
+          "Next": "IngestToRDS"
+        }
+      ],
+      "Default": "NotifyPartialFailure"
+    },
+    "IngestToRDS": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:IngestToRDS",
+      "Comment": "Phase 2: Ingest SQLite data to AWS RDS PostgreSQL",
+      "TimeoutSeconds": 900,
+      "HeartbeatSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyRDSFailure"
+        }
+      ],
+      "Next": "NotifySuccess"
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Comment": "Send success notification via SNS",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "✅ Stock Data Pipeline - SUCCESS",
+        "Message.$": "States.Format('🎉 Stock Data Pipeline completed successfully!\n\n📊 PHASE 1: API Fetch (Yahoo Finance + FMP)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Stocks fetched: {}\n• Company profiles: {}\n• Historical prices: {}\n• Benchmark mappings: {}\n• Data quality flags: {}\n• Instruments: {}\n• Execution time: {:.2f} seconds\n\n📥 PHASE 2: RDS Ingestion (SQLite → PostgreSQL)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Stocks ingested: {}\n• Prices ingested: {}\n• Execution time: {:.2f} seconds\n\n🔗 DETAILS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Timestamp: {}\n• Execution ID: {}\n• Region: ${AWS_REGION}\n\n✨ Your stock data is now up to date in RDS!', $.fetch.stocks_count, $.fetch.company_profile_count, $.fetch.prices_count, $.fetch.mappings_count, $.fetch.flags_count, $.fetch.instruments_count, $.execution_time_seconds, $.ingest.stocks_count, $.ingest.prices_count, $.execution_time_seconds, $.timestamp, $$.Execution.Name)"
+      },
+      "End": true
+    },
+    "NotifyPartialFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Comment": "Notify about partial failure (some API scripts failed but not enough data to proceed)",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "⚠️ Stock Data Pipeline - PARTIAL FAILURE",
+        "Message.$": "States.Format('⚠️ Stock Data Pipeline partially failed - insufficient data to proceed to RDS.\n\n📊 API FETCH STATUS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Stocks fetched: {}\n• Prices fetched: {}\n• Failed scripts: {}\n\n🔗 DETAILS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Timestamp: {}\n• Execution ID: {}\n• Region: ${AWS_REGION}\n\n❌ RDS ingestion was SKIPPED due to insufficient data.\n\nPlease check CloudWatch Logs for details:\n/aws/lambda/FetchStocksData', $.fetch.stocks_count, $.fetch.prices_count, $.failed_scripts, $.timestamp, $$.Execution.Name)"
+      },
+      "End": true
+    },
+    "NotifyRDSFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Comment": "Notify about RDS ingestion failure (API fetch succeeded but RDS failed)",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "❌ Stock Data Pipeline - RDS INGESTION FAILED",
+        "Message.$": "States.Format('❌ Stock Data Pipeline: RDS ingestion failed\n\n✅ Phase 1 (API Fetch): SUCCESS\n• {} stocks and {} prices fetched successfully\n\n❌ Phase 2 (RDS Ingestion): FAILED\n• Error: {}\n\n🔗 DETAILS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Timestamp: {}\n• Execution ID: {}\n• Region: ${AWS_REGION}\n\n📋 Data was successfully fetched from APIs and stored in SQLite at:\n/mnt/efs/portfolio.db\n\nPlease check CloudWatch Logs for details:\n/aws/lambda/IngestToRDS', $.fetch.stocks_count, $.fetch.prices_count, $.error.Cause, $.timestamp, $$.Execution.Name)"
+      },
+      "End": true
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Comment": "Notify about complete failure (API fetch failed)",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "❌ Stock Data Pipeline - COMPLETE FAILURE",
+        "Message.$": "States.Format('❌ Stock Data Pipeline failed completely\n\n❌ Phase 1 (API Fetch): FAILED\n• Error: {}\n• Failed scripts: {}\n\n🔗 DETAILS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Execution ID: {}\n• Region: ${AWS_REGION}\n\n📋 Please check CloudWatch Logs for details:\n/aws/lambda/FetchStocksData\n\n🔧 Possible causes:\n• API keys invalid or expired\n• Network connectivity issues\n• EFS mount failure\n• Script errors\n\nReview the logs and retry the execution.', $.error.Cause, $.failed_scripts, $$.Execution.Name)"
+      },
+      "End": true
+    }
+  }
+}

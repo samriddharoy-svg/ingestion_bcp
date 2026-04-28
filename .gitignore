@@ -1,0 +1,50 @@
+# Environment & Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+
+# Database files
+*.db
+*.dump
+*.sql.gz
+
+# Large binary/data files
+*.zip
+*.xlsx
+*.csv
+*.numbers
+*.docx
+
+# Logs
+*.log
+samriddha.txt
+docker-logs.txt
+
+# IDE & OS
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Misc local files
+misc/
+backup*.dump
+semantic.dump
+full_dump_no_semantic.dump
+equities_first_dev*.dump
+cab_logistics_dev_db*.dump
+docker-logs.txt
+live_ingest.log
+awscliv2.zip
+ingestion_backup.zip
+aws/

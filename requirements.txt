@@ -1,0 +1,22 @@
+# Core dependencies
+requests==2.31.0
+python-dotenv==1.0.0
+
+# Database
+psycopg2-binary==2.9.9
+sqlite3-to-mysql==2.1.7
+
+# AWS SDK (for Secrets Manager, S3, etc.)
+boto3==1.34.34
+botocore==1.34.34
+
+# Data processing
+pandas==2.2.0
+numpy>=1.26.0,<2.0.0
+yfinance==0.2.40
+
+# Utilities
+pytz==2024.1
+feedparser==6.0.11
+openai>=1.0.0
+

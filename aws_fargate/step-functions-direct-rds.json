@@ -1,0 +1,77 @@
+{
+  "Comment": "Stock Data Pipeline: Direct RDS Write (Single Phase - No EFS)",
+  "StartAt": "FetchAndWriteToRDS",
+  "States": {
+    "FetchAndWriteToRDS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "arn:aws:ecs:ap-south-1:YOUR_ACCOUNT_ID:cluster/stock-data-cluster",
+        "TaskDefinition": "arn:aws:ecs:ap-south-1:YOUR_ACCOUNT_ID:task-definition/stock-data-direct-rds",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": [
+              "subnet-XXXXXXXXX",
+              "subnet-YYYYYYYYY"
+            ],
+            "SecurityGroups": [
+              "sg-XXXXXXXXX"
+            ],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "stock-fetch-rds-container",
+              "Command": ["python", "run_fetch_all.py"]
+            }
+          ]
+        }
+      },
+      "TimeoutSeconds": 3600,
+      "HeartbeatSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "ResultPath": "$.fetchResult",
+      "Next": "NotifySuccess"
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-south-1:YOUR_ACCOUNT_ID:StockDataPipelineNotifications",
+        "Subject": "✅ Stock Data Pipeline (Direct RDS) - SUCCESS",
+        "Message.$": "States.Format('Stock Data fetched and written to RDS successfully.\\n\\nTask ARN: {}\\nExecution ARN: {}\\nTimestamp: {}', $.fetchResult.TaskArn, $$.Execution.Id, $$.Execution.StartTime)"
+      },
+      "End": true
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-south-1:YOUR_ACCOUNT_ID:StockDataPipelineNotifications",
+        "Subject": "❌ Stock Data Pipeline (Direct RDS) - FAILURE",
+        "Message.$": "States.Format('Stock Data fetch failed.\\n\\nError Details:\\n{}\\n\\nExecution ARN: {}\\nTimestamp: {}', $.error.Cause, $$.Execution.Id, $$.Execution.StartTime)"
+      },
+      "End": true
+    }
+  }
+}

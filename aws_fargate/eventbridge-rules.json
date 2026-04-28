@@ -1,0 +1,54 @@
+{
+  "ScheduledRules": [
+    {
+      "Name": "HourlyStockDataFetch",
+      "Description": "Trigger stock data pipeline every hour",
+      "ScheduleExpression": "cron(0 * * * ? *)",
+      "State": "ENABLED",
+      "Targets": [
+        {
+          "Id": "1",
+          "Arn": "arn:aws:states:ap-south-1:YOUR_ACCOUNT_ID:stateMachine:StockDataPipelineFargate",
+          "RoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/EventBridgeStepFunctionsRole",
+          "Input": "{\"source\": \"eventbridge\", \"schedule\": \"hourly\"}"
+        }
+      ]
+    },
+    {
+      "Name": "DailyStockDataFetchAfterMarket",
+      "Description": "Trigger stock data pipeline daily at 9 PM UTC (after US market close)",
+      "ScheduleExpression": "cron(0 21 * * ? *)",
+      "State": "ENABLED",
+      "Targets": [
+        {
+          "Id": "1",
+          "Arn": "arn:aws:states:ap-south-1:YOUR_ACCOUNT_ID:stateMachine:StockDataPipelineFargate",
+          "RoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/EventBridgeStepFunctionsRole",
+          "Input": "{\"source\": \"eventbridge\", \"schedule\": \"daily\"}"
+        }
+      ]
+    },
+    {
+      "Name": "MarketHoursStockDataFetch",
+      "Description": "Trigger every 15 minutes during market hours (Mon-Fri 14:00-21:00 UTC)",
+      "ScheduleExpression": "cron(0/15 14-21 ? * MON-FRI *)",
+      "State": "DISABLED",
+      "Targets": [
+        {
+          "Id": "1",
+          "Arn": "arn:aws:states:ap-south-1:YOUR_ACCOUNT_ID:stateMachine:StockDataPipelineFargate",
+          "RoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/EventBridgeStepFunctionsRole",
+          "Input": "{\"source\": \"eventbridge\", \"schedule\": \"market-hours\"}"
+        }
+      ]
+    }
+  ],
+  "ScheduleExpressionExamples": {
+    "Every hour": "cron(0 * * * ? *)",
+    "Every 15 minutes": "cron(0/15 * * * ? *)",
+    "Daily at 9 AM UTC": "cron(0 9 * * ? *)",
+    "Mon-Fri at 2 PM UTC": "cron(0 14 ? * MON-FRI *)",
+    "Weekdays market hours (every 30 min)": "cron(0/30 14-21 ? * MON-FRI *)",
+    "After market close (10 PM UTC)": "cron(0 22 ? * MON-FRI *)"
+  }
+}

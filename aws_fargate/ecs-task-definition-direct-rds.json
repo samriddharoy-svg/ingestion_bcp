@@ -1,0 +1,75 @@
+{
+  "family": "stock-data-direct-rds",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/stockDataFetchTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "stock-fetch-rds-container",
+      "image": "YOUR_ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/stock-data-ingestion:latest",
+      "essential": true,
+      "command": ["python", "run_fetch_all.py"],
+      "environment": [
+        {
+          "name": "PYTHONUNBUFFERED",
+          "value": "1"
+        },
+        {
+          "name": "USE_RDS_DIRECT",
+          "value": "true"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "FMP_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:stock-api-keys:FMP_API_KEY::"
+        },
+        {
+          "name": "TIINGO_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:stock-api-keys:TIINGO_API_KEY::"
+        },
+        {
+          "name": "RDS_HOST",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials:host::"
+        },
+        {
+          "name": "RDS_PORT",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials:port::"
+        },
+        {
+          "name": "RDS_USER",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials:username::"
+        },
+        {
+          "name": "RDS_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials:password::"
+        },
+        {
+          "name": "RDS_DATABASE",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials:database::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/stock-data-direct-rds",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "fetch"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c 'import psycopg2' || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "ECSTaskExecutionRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:*:*:*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:stock-api-keys*",
+          "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials*"
+        ]
+      }
+    ]
+  },
+  "StockDataFetchTaskRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite",
+          "elasticfilesystem:ClientRootAccess"
+        ],
+        "Resource": "arn:aws:elasticfilesystem:ap-south-1:YOUR_ACCOUNT_ID:file-system/fs-XXXXXXXXX"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:stock-api-keys*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:*:*:*"
+      }
+    ]
+  },
+  "StockDataIngestTaskRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientRead"
+        ],
+        "Resource": "arn:aws:elasticfilesystem:ap-south-1:YOUR_ACCOUNT_ID:file-system/fs-XXXXXXXXX"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:ap-south-1:YOUR_ACCOUNT_ID:secret:rds-credentials*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "rds-db:connect"
+        ],
+        "Resource": "arn:aws:rds-db:ap-south-1:YOUR_ACCOUNT_ID:dbuser:*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:*:*:*"
+      }
+    ]
+  },
+  "StepFunctionsExecutionRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ecs:RunTask",
+          "ecs:StopTask",
+          "ecs:DescribeTasks"
+        ],
+        "Resource": [
+          "arn:aws:ecs:ap-south-1:YOUR_ACCOUNT_ID:task-definition/stock-data-fetch-task:*",
+          "arn:aws:ecs:ap-south-1:YOUR_ACCOUNT_ID:task-definition/stock-data-ingest-task:*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ecs:DescribeTaskDefinition"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "iam:PassRole"
+        ],
+        "Resource": [
+          "arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskExecutionRole",
+          "arn:aws:iam::YOUR_ACCOUNT_ID:role/stockDataFetchTaskRole",
+          "arn:aws:iam::YOUR_ACCOUNT_ID:role/stockDataIngestTaskRole"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "sns:Publish"
+        ],
+        "Resource": "arn:aws:sns:ap-south-1:YOUR_ACCOUNT_ID:StockDataPipelineNotifications"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "events:PutTargets",
+          "events:PutRule",
+          "events:DescribeRule"
+        ],
+        "Resource": "arn:aws:events:ap-south-1:YOUR_ACCOUNT_ID:rule/StepFunctions*"
+      }
+    ]
+  },
+  "EventBridgeStepFunctionsRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "states:StartExecution"
+        ],
+        "Resource": [
+          "arn:aws:states:ap-south-1:YOUR_ACCOUNT_ID:stateMachine:StockDataPipelineFargate"
+        ]
+      }
+    ]
+  }
+}

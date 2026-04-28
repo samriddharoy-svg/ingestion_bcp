@@ -1,0 +1,160 @@
+{
+  "Comment": "Stock Data Pipeline with Parallel Processing per Stock",
+  "StartAt": "PrepareStockList",
+  "States": {
+    "PrepareStockList": {
+      "Type": "Pass",
+      "Comment": "Prepare list of stocks to process",
+      "Result": {
+        "stocks": [
+          {"ticker": "0853.HK", "name": "MICROPORT"},
+          {"ticker": "9618.HK", "name": "JD.com"},
+          {"ticker": "008930.KS", "name": "Hanmi Science"},
+          {"ticker": "068270.KS", "name": "Celltrion"},
+          {"ticker": "032350.KS", "name": "Lotte Tour"},
+          {"ticker": "5216.T", "name": "Kuramoto"},
+          {"ticker": "6098.T", "name": "Recruit Holdings"},
+          {"ticker": "CS.ST", "name": "CoinShares"},
+          {"ticker": "NB2.DE", "name": "Northern Data"}
+        ]
+      },
+      "ResultPath": "$.input",
+      "Next": "ProcessStocksInParallel"
+    },
+    "ProcessStocksInParallel": {
+      "Type": "Map",
+      "Comment": "Process each stock in parallel (up to 9 concurrent executions)",
+      "ItemsPath": "$.input.stocks",
+      "MaxConcurrency": 3,
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "FetchSingleStock",
+        "States": {
+          "FetchSingleStock": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:FetchSingleStockData",
+            "Comment": "Fetch data for a single stock from APIs to SQLite",
+            "TimeoutSeconds": 300,
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed", "States.Timeout"],
+                "IntervalSeconds": 30,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.error",
+                "Next": "MarkStockFailed"
+              }
+            ],
+            "ResultPath": "$.fetchResult",
+            "Next": "MarkStockSuccess"
+          },
+          "MarkStockSuccess": {
+            "Type": "Pass",
+            "Comment": "Mark this stock as successfully processed",
+            "Result": {
+              "status": "SUCCESS"
+            },
+            "ResultPath": "$.status",
+            "End": true
+          },
+          "MarkStockFailed": {
+            "Type": "Pass",
+            "Comment": "Mark this stock as failed",
+            "Result": {
+              "status": "FAILED"
+            },
+            "ResultPath": "$.status",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.stockResults",
+      "Next": "AggregateResults"
+    },
+    "AggregateResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:AggregateStockResults",
+      "Comment": "Aggregate results from all stocks and prepare for RDS ingestion",
+      "TimeoutSeconds": 60,
+      "ResultPath": "$.aggregated",
+      "Next": "CheckAggregateStatus"
+    },
+    "CheckAggregateStatus": {
+      "Type": "Choice",
+      "Comment": "Check if we have minimum data to proceed to RDS",
+      "Choices": [
+        {
+          "Variable": "$.aggregated.status",
+          "StringEquals": "SUCCESS",
+          "Next": "IngestToRDS"
+        },
+        {
+          "Variable": "$.aggregated.status",
+          "StringEquals": "PARTIAL_SUCCESS",
+          "Next": "IngestToRDS"
+        }
+      ],
+      "Default": "NotifyFailure"
+    },
+    "IngestToRDS": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:IngestToRDS",
+      "Comment": "Ingest all stock data from SQLite to RDS",
+      "TimeoutSeconds": 900,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "States.Timeout"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "NotifyRDSFailure"
+        }
+      ],
+      "ResultPath": "$.ingestResult",
+      "Next": "NotifySuccess"
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "✅ Stock Data Pipeline - SUCCESS (Parallel Processing)",
+        "Message.$": "States.Format('🎉 Stock Data Pipeline completed successfully!\n\n📊 PARALLEL PROCESSING RESULTS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Total stocks processed: {}\n• Successful: {}\n• Failed: {}\n• Execution time: {:.2f} seconds\n\n✅ Successful Stocks:\n{}\n\n❌ Failed Stocks:\n{}\n\n📥 RDS INGESTION\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Stocks ingested: {}\n• Prices ingested: {}\n\n🔗 DETAILS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Timestamp: {}\n• Execution ID: {}\n• Region: ${AWS_REGION}\n\n✨ Your stock data is now up to date!', $.aggregated.total_stocks, $.aggregated.successful_count, $.aggregated.failed_count, $.aggregated.execution_time, $.aggregated.successful_stocks, $.aggregated.failed_stocks, $.ingestResult.stocks_count, $.ingestResult.prices_count, $.aggregated.timestamp, $$.Execution.Name)"
+      },
+      "End": true
+    },
+    "NotifyRDSFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "❌ Stock Data Pipeline - RDS INGESTION FAILED",
+        "Message.$": "States.Format('❌ RDS ingestion failed\n\n✅ Stock Fetch: {} successful, {} failed\n❌ RDS Ingestion: FAILED\n\nError: {}\n\nExecution ID: {}', $.aggregated.successful_count, $.aggregated.failed_count, $.error.Cause, $$.Execution.Name)"
+      },
+      "End": true
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:DataPipelineNotifications",
+        "Subject": "❌ Stock Data Pipeline - COMPLETE FAILURE",
+        "Message.$": "States.Format('❌ Pipeline failed completely\n\nAll {} stocks failed to fetch data.\n\nExecution ID: {}', $.aggregated.total_stocks, $$.Execution.Name)"
+      },
+      "End": true
+    }
+  }
+}

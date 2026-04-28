@@ -1,0 +1,632 @@
+
+
+services:
+
+  # ========== Benchmarks ==========
+  fetch-benchmarks:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-benchmarks
+    image: stock-ingestion-benchmarks:latest
+    container_name: stock-fetch-benchmarks
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - TIINGO_API_KEY=${TIINGO_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+    # ========== News ==========
+  fetch-news:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-news
+    image: stock-ingestion-news:latest
+    container_name: stock-fetch-news
+    environment:
+      - USE_RDS_DIRECT=true
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    
+    networks:
+      - stock-network
+
+
+
+
+
+   # ========== Stock Flags ==========
+  fetch-flag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-flag
+    image: stock-ingestion-fetch-flag:latest
+    container_name: stock-fetch-flag
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+
+  # ========== Live Prices ==========
+  fetch-live-prices:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-live-prices
+    image: stock-ingestion-live-prices:latest
+    container_name: stock-fetch-live-prices
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - TIINGO_API_KEY=${TIINGO_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fetch-benchmarks:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+
+  # ========== Valuation Metrics ==========
+  fetch-valuation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-valuation
+    image: stock-ingestion-valuation:latest
+    container_name: stock-fetch-valuation
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fetch-live-prices:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+
+  # ========== Balance Sheet ==========
+  fetch-balance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-balance
+    image: stock-ingestion-balance:latest
+    container_name: stock-fetch-balance
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fetch-valuation:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+
+  # ========== Cash Flow ==========
+  fetch-cashflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-cashflow
+    image: stock-ingestion-cashflow:latest
+    container_name: stock-fetch-cashflow
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fetch-balance:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+
+  # ========== Margin & Growth ==========
+  fetch-margingrowth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-margingrowth
+    image: stock-ingestion-margingrowth:latest
+    container_name: stock-fetch-margingrowth
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fetch-cashflow:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+
+  # ========== Revenue ==========
+  fetch-revenue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-revenue
+    image: stock-ingestion-revenue:latest
+    container_name: stock-fetch-revenue
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== EBITA ==========
+  fetch-ebita:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-ebita
+    image: stock-ingestion-ebita:latest
+    container_name: stock-fetch-ebita
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Net Income ==========
+  fetch-netincome:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-netincome
+    image: stock-ingestion-netincome:latest
+    container_name: stock-fetch-netincome
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Free Cash Flow ==========
+  fetch-freecashflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-freecashflow
+    image: stock-ingestion-freecashflow:latest
+    container_name: stock-fetch-freecashflow
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== EPS ==========
+  fetch-eps:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-eps
+    image: stock-ingestion-eps:latest
+    container_name: stock-fetch-eps
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Cash & Debt ==========
+  fetch-cash-debt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-cash-debt
+    image: stock-ingestion-cash-debt:latest
+    container_name: stock-fetch-cash-debt
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Return of Capital ==========
+  fetch-returnofcapital:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-returnofcapital
+    image: stock-ingestion-returnofcapital:latest
+    container_name: stock-fetch-returnofcapital
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Shares Outstanding ==========
+  fetch-sharesoutstanding:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-sharesoutstanding
+    image: stock-ingestion-sharesoutstanding:latest
+    container_name: stock-fetch-sharesoutstanding
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Dividend Per Share ==========
+  fetch-dividend-per-share:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-dividend-per-share
+    image: stock-ingestion-dividend-per-share:latest
+    container_name: stock-fetch-dividend-per-share
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Price to Earnings ==========
+  fetch-price-to-earning:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-price-to-earning
+    image: stock-ingestion-price-to-earning:latest
+    container_name: stock-fetch-price-to-earning
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Outlook Ingestion ==========
+  fetch-outlookingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-outlookingestion
+    image: stock-ingestion-outlookingestion:latest
+    container_name: stock-fetch-outlookingestion
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - stock-network
+
+
+  # ========== Refresh Stock Fundamentals MVs ==========
+  refresh-stocks-fundamentals-mviews:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: refresh-stocks-fundamentals-mviews
+    image: stock-ingestion-refresh-stocks-fundamentals-mviews:latest
+    container_name: stock-refresh-stocks-fundamentals-mviews
+    environment:
+      - USE_RDS_DIRECT=true
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    
+    networks:
+      - stock-network    
+
+
+        # ========== Correlation Matrix ==========
+  fetch-correlation-matrix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-correlation-matrix
+    image: stock-ingestion-correlation:latest
+    container_name: stock-fetch-correlation
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    
+    networks:
+      - stock-network
+
+
+  # ========== AI Fundamentals Summary ==========
+  fetch-ai-summary-fundamentals:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-ai-summary-fundamentals
+    image: stock-ingestion-ai-fundamentals:latest
+    container_name: stock-ai-fundamentals
+    environment:
+      - USE_RDS_DIRECT=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    
+    networks:
+      - stock-network
+
+
+  # ========== AI Portfolio Summary ==========
+  fetch-ai-summary-portfolio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-ai-summary-portfolio
+    image: stock-ingestion-ai-portfolio:latest
+    container_name: stock-ai-portfolio
+    environment:
+      - USE_RDS_DIRECT=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    
+    networks:
+      - stock-network
+
+
+  # ========== Stock Alerts ==========
+  fetch-stockalert:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-stockalert
+    image: stock-ingestion-stockalert:latest
+    container_name: stock-stockalert
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+   
+    networks:
+      - stock-network
+
+  
+
+    # ========== Refresh Final Materialized Views ==========
+  refresh-materialized-views:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: refresh-materialized-views
+    image: stock-ingestion-refresh-materialized-views:latest
+    container_name: stock-refresh-materialized-views
+    environment:
+      - USE_RDS_DIRECT=true
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      refresh-stocks-fundamentals-mviews:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+      
+  # ========== Instrument Prices ==========
+  fetch-instrument-prices:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-instrument-prices
+    image: stock-ingestion-instrument-prices:latest
+    container_name: stock-fetch-instrument-prices
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_dev_db
+      - RDS_USER=ef_dev_user_rw
+      - RDS_PASSWORD=ef_dev_user_rw@123!
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fetch-live-prices:
+        condition: service_completed_successfully
+    networks:
+      - stock-network
+
+
+networks:
+  stock-network:
+    driver: bridge
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
