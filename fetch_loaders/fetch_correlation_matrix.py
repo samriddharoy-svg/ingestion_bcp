@@ -451,8 +451,12 @@ def process_stock(config, lookback_days=LOOKBACK_DAYS):
     
     price_data = {}
     for entity_type, (symbol, display_name, src) in entities.items():
+        if not symbol:
+            print(f"  Skipping {entity_type}: no symbol configured")
+            continue
+
         print(f"  Fetching {entity_type}: {symbol}...", end=" ")
-        
+
         fetch_source = src
         if entity_type == 'stock' and source == 'yfinance':
             fetch_source = 'yfinance'
