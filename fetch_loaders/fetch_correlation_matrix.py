@@ -56,7 +56,81 @@ DB_CONFIG = {
 LOOKBACK_DAYS = 365
 
 
-STOCK_CONFIG = {
+def fetch_stock_config_from_db():
+    """
+    Build STOCK_CONFIG dynamically from DB for ALL non-peer stocks.
+    Joins stock_peers for peer ticker and stocks_benchmark_mapping + instruments
+    for benchmark symbol. Derives forex pairs from currency_code.
+    Falls back to _FALLBACK_STOCK_CONFIG on DB error.
+    """
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                s.stock_id,
+                s.ticker,
+                s.currency_code,
+                sp.peer_symbol,
+                i.instrument_code AS benchmark_code
+            FROM ingest_db.stocks s
+            LEFT JOIN (
+                SELECT DISTINCT ON (stock_id) stock_id, peer_symbol
+                FROM ingest_db.stock_peers
+                ORDER BY stock_id, id
+            ) sp ON s.stock_id = sp.stock_id
+            LEFT JOIN ingest_db.stocks_benchmark_mapping sbm
+                ON s.stock_id = sbm.stock_id AND sbm.ranking_order = 1
+            LEFT JOIN ingest_db.instruments i
+                ON sbm.instrument_id = i.instrument_id
+            WHERE s.is_peer = false
+            ORDER BY s.stock_id
+        """)
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        stock_config = {}
+        for stock_id, ticker, currency_code, peer_symbol, benchmark_code in rows:
+            ticker = ticker.strip()
+            currency = (currency_code or 'USD').strip().upper()
+
+            if currency != 'USD':
+                forex_a = f"{currency}USD"
+                forex_b = f"USD{currency}"
+            else:
+                forex_a = ''
+                forex_b = ''
+
+            benchmark_display = benchmark_code.lstrip('^') if benchmark_code else ''
+
+            stock_config[stock_id] = {
+                'stock_id': stock_id,
+                'ticker': ticker,
+                'display_ticker': ticker,
+                'peer': peer_symbol or '',
+                'peer_display': peer_symbol or '',
+                'benchmark': benchmark_code or '',
+                'benchmark_display': benchmark_display,
+                'forex_a': forex_a,
+                'forex_a_display': forex_a,
+                'forex_b': forex_b,
+                'forex_b_display': forex_b,
+                'source': 'fmp',
+            }
+
+        print(f"[DB] Loaded {len(stock_config)} stocks for correlation matrix")
+        return stock_config
+
+    except Exception as e:
+        print(f"[DB] Warning: Could not fetch stock config: {e}")
+        print("[DB] Falling back to hardcoded config")
+        return _FALLBACK_STOCK_CONFIG
+
+
+_FALLBACK_STOCK_CONFIG = {
     1: {
         'stock_id': 1,
         'ticker': '0853.HK',
@@ -560,12 +634,12 @@ def main():
     parser.add_argument('--dry-run', action='store_true',
                        help='Preview only, do not insert to database')
     parser.add_argument('--stock', type=int,
-                       help='Process only specific stock_id (1-10)')
+                       help='Process only specific stock_id')
     parser.add_argument('--lookback', type=int, default=LOOKBACK_DAYS,
                        help=f'Days of historical data to use (default: {LOOKBACK_DAYS})')
-    
+
     args = parser.parse_args()
-    
+
     print("\n" + "="*60)
     print("CORRELATION MATRIX CALCULATOR")
     print("="*60)
@@ -574,7 +648,10 @@ def main():
     print(f"Matrix size: 5x5 (25 entries per stock)")
     print(f"Dry run: {args.dry_run}")
     print("="*60)
-    
+
+    # Load all stock configs dynamically from DB
+    STOCK_CONFIG = fetch_stock_config_from_db()
+
     # Determine which stocks to process
     if args.stock:
         if args.stock not in STOCK_CONFIG:
