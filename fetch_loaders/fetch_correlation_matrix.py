@@ -311,7 +311,9 @@ def fetch_fmp_prices(symbol, days=400):
 def fetch_yfinance_prices(symbol, days=400):
     """Fetch historical prices from yfinance"""
     try:
-        ticker = yf.Ticker(symbol)
+        # yfinance requires forex pairs in format KRWUSD=X
+        yf_symbol = f"{symbol}=X" if (len(symbol) == 6 and symbol.isalpha()) else symbol
+        ticker = yf.Ticker(yf_symbol)
         df = ticker.history(period="2y")
         
         if df.empty:
@@ -639,6 +641,8 @@ def main():
                        help='Preview only, do not insert to database')
     parser.add_argument('--stock', type=int,
                        help='Process only specific stock_id')
+    parser.add_argument('--limit', type=int,
+                       help='Process only the first N stocks (for testing)')
     parser.add_argument('--lookback', type=int, default=LOOKBACK_DAYS,
                        help=f'Days of historical data to use (default: {LOOKBACK_DAYS})')
 
@@ -663,6 +667,9 @@ def main():
             print(f"Valid stock_ids: {list(STOCK_CONFIG.keys())}")
             return
         stocks_to_process = {args.stock: STOCK_CONFIG[args.stock]}
+    elif args.limit:
+        limited_items = list(STOCK_CONFIG.items())[:args.limit]
+        stocks_to_process = dict(limited_items)
     else:
         stocks_to_process = STOCK_CONFIG
     
