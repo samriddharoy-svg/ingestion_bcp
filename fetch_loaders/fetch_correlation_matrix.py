@@ -73,7 +73,7 @@ def fetch_stock_config_from_db():
                 s.ticker,
                 s.currency_code,
                 sp.peer_symbol,
-                i.instrument_code AS benchmark_code
+                i.symbol AS benchmark_code
             FROM ingest_db.stocks s
             LEFT JOIN (
                 SELECT DISTINCT ON (stock_id) stock_id, peer_symbol
