@@ -1,0 +1,14 @@
+{
+  "Name": "DailyFullDatabaseBackup",
+  "Description": "Trigger full pg_dump backup daily at 1 AM UTC (6:30 AM IST)",
+  "ScheduleExpression": "cron(0 1 * * ? *)",
+  "State": "ENABLED",
+  "Targets": [
+    {
+      "Id": "BackupStateMachine",
+      "Arn": "arn:aws:states:ap-south-1:724134393175:stateMachine:state-machine-stock-ingestion-bcp",
+      "RoleArn": "arn:aws:iam::724134393175:role/EventBridgeStepFunctionsRole",
+      "Input": "{\"source\": \"eventbridge\", \"schedule\": \"daily-backup\"}"
+    }
+  ]
+}

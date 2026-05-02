@@ -103,6 +103,44 @@
       }
     ]
   },
+  "StockDataBackupTaskRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:PutObject",
+          "s3:PutObjectAcl"
+        ],
+        "Resource": "arn:aws:s3:::equities-first-bcp-backups/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:ListBucket"
+        ],
+        "Resource": "arn:aws:s3:::equities-first-bcp-backups"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:ap-south-1:724134393175:secret:rds-credentials*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:*:*:*"
+      }
+    ]
+  },
   "StepFunctionsExecutionRole": {
     "Version": "2012-10-17",
     "Statement": [

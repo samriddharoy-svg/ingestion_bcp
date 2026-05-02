@@ -1,0 +1,115 @@
+{
+  "Comment": "Stock Data Pipeline + Daily Full DB Backup to S3",
+  "StartAt": "FetchAndWriteToRDS",
+  "States": {
+    "FetchAndWriteToRDS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "arn:aws:ecs:ap-south-1:724134393175:cluster/stock-data-cluster",
+        "TaskDefinition": "arn:aws:ecs:ap-south-1:724134393175:task-definition/stock-data-direct-rds",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["subnet-XXXXXXXXX", "subnet-YYYYYYYYY"],
+            "SecurityGroups": ["sg-XXXXXXXXX"],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "stock-fetch-rds-container",
+              "Command": ["python", "run_fetch_all.py"]
+            }
+          ]
+        }
+      },
+      "TimeoutSeconds": 3600,
+      "HeartbeatSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "States.Timeout"],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.fetchError",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "ResultPath": "$.fetchResult",
+      "Next": "BackupToS3"
+    },
+
+    "BackupToS3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "arn:aws:ecs:ap-south-1:724134393175:cluster/stock-data-cluster",
+        "TaskDefinition": "arn:aws:ecs:ap-south-1:724134393175:task-definition/stock-data-backup",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["subnet-XXXXXXXXX", "subnet-YYYYYYYYY"],
+            "SecurityGroups": ["sg-XXXXXXXXX"],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "backup-container",
+              "Command": ["python", "backup_rds_to_s3.py"]
+            }
+          ]
+        }
+      },
+      "TimeoutSeconds": 1800,
+      "HeartbeatSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "States.Timeout"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.backupError",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "ResultPath": "$.backupResult",
+      "Next": "NotifySuccess"
+    },
+
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-south-1:724134393175:StockDataPipelineNotifications",
+        "Subject": "Stock Pipeline + Backup - SUCCESS",
+        "Message.$": "States.Format('Data fetch and full DB backup completed successfully.\n\nExecution: {}\nTime: {}', $$.Execution.Id, $$.Execution.StartTime)"
+      },
+      "End": true
+    },
+
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-south-1:724134393175:StockDataPipelineNotifications",
+        "Subject": "Stock Pipeline + Backup - FAILED",
+        "Message.$": "States.Format('Pipeline failed.\n\nExecution: {}\nTime: {}', $$.Execution.Id, $$.Execution.StartTime)"
+      },
+      "End": true
+    }
+  }
+}

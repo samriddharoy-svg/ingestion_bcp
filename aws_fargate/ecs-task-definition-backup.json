@@ -1,0 +1,52 @@
+{
+  "family": "stock-data-backup",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::724134393175:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::724134393175:role/stockDataBackupTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "backup-container",
+      "image": "724134393175.dkr.ecr.ap-south-1.amazonaws.com/stock-data-ingestion:latest",
+      "essential": true,
+      "command": ["python", "backup_rds_to_s3.py"],
+      "environment": [
+        { "name": "PYTHONUNBUFFERED",  "value": "1" },
+        { "name": "BACKUP_S3_BUCKET", "value": "equities-first-bcp-backups" },
+        { "name": "AWS_DEFAULT_REGION","value": "ap-south-1" }
+      ],
+      "secrets": [
+        {
+          "name": "RDS_HOST",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:724134393175:secret:rds-credentials:host::"
+        },
+        {
+          "name": "RDS_PORT",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:724134393175:secret:rds-credentials:port::"
+        },
+        {
+          "name": "RDS_USER",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:724134393175:secret:rds-credentials:username::"
+        },
+        {
+          "name": "RDS_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:724134393175:secret:rds-credentials:password::"
+        },
+        {
+          "name": "RDS_DATABASE",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:724134393175:secret:rds-credentials:database::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/stock-data-backup",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "backup"
+        }
+      }
+    }
+  ]
+}
