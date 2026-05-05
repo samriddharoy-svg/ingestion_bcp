@@ -1,0 +1,95 @@
+# Deploy to development EKS cluster (account: 932453197523 / argus-dev / ap-south-1).
+# Image is built and pushed to dev-account ECR directly (no cross-account replication).
+name: Deploy Development
+
+on:
+  push:
+    branches:
+      - bcp-ingestion-pipeline
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-development
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    uses: ./.github/workflows/ecr_push.yml
+    with:
+      aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+    secrets:
+      aws_access_key_id: ${{ secrets.AWS_KEY_DEV }}
+      aws_secret_access_key: ${{ secrets.AWS_SECRET_DEV }}
+
+  deploy:
+    name: Helm Deploy
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: development
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'bernailab-dev-eks' }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'argus-dev' }}
+      HELM_RELEASE_NAME: ${{ vars.HELM_RELEASE_NAME || 'bcp-ingestion-pipeline-dev' }}
+      HELM_CHART_PATH: deploy/helm/bcp-ingestion-pipeline
+      ECR_REPOSITORY: stock-data-ingestion
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify branch
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "bcp-ingestion-pipeline" ] && [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]; then
+            echo "Development deploys must run from the bcp-ingestion-pipeline branch."
+            exit 1
+          fi
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_KEY_DEV }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+
+      - name: Deploy with Helm
+        run: |
+          set -euo pipefail
+
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+          VALUE_ARGS=()
+          if [ -f "${HELM_CHART_PATH}/values.yaml" ]; then
+            VALUE_ARGS+=(--values "${HELM_CHART_PATH}/values.yaml")
+          fi
+          if [ -f "${HELM_CHART_PATH}/values-dev.yaml" ]; then
+            VALUE_ARGS+=(--values "${HELM_CHART_PATH}/values-dev.yaml")
+          fi
+
+          helm lint "${HELM_CHART_PATH}" "${VALUE_ARGS[@]}"
+
+          helm upgrade --install "${HELM_RELEASE_NAME}" "${HELM_CHART_PATH}" \
+            --namespace "${K8S_NAMESPACE}" \
+            --create-namespace \
+            "${VALUE_ARGS[@]}" \
+            --set "image.repository=${ECR_REGISTRY}/${ECR_REPOSITORY}" \
+            --set "image.tag=${IMAGE_TAG}" \
+            --atomic \
+            --timeout 10m \
+            --wait
+
+      - name: Verify deployed resources
+        run: |
+          kubectl get all,ingress,configmap,secret -n "${K8S_NAMESPACE}" -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME}" || true
