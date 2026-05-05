@@ -36,6 +36,10 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Markdown docs (internal only — not for deployment)
+*.md
+!README.md
+
 # Misc local files
 misc/
 backup*.dump
