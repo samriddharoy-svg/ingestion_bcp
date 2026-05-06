@@ -1,0 +1,28 @@
+# Development environment overrides for bcp-ingestion-pipeline.
+# Runs in dev account 932453197523, region ap-south-1.
+# CI sets image.repository and image.tag at deploy time via --set.
+
+image:
+  tag: latest
+
+serviceAccount:
+  create: true
+  name: bcp-ingestion-pipeline
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::932453197523:role/bcp-ingestion-pipeline-irsa-dev
+
+config:
+  PYTHONUNBUFFERED: "1"
+  USE_RDS_DIRECT: "true"
+  AWS_REGION: ap-south-1
+
+secretStore:
+  create: true
+  aws:
+    service: SecretsManager
+    region: ap-south-1
+    role: ""
+
+externalSecret:
+  enabled: true
+  refreshInterval: 1h
