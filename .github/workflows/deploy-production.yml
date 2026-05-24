@@ -21,5 +21,5 @@ jobs:
     with:
       aws_region: ${{ vars.AWS_REGION || 'us-west-2' }}
     secrets:
-      aws_access_key_id: ${{ secrets.AWS_KEY_PROD }}
-      aws_secret_access_key: ${{ secrets.AWS_SECRET_PROD }}
+      aws_access_key_id: ${{ secrets.ARGUS_AWS_KEY_PRODUCTION }}
+      aws_secret_access_key: ${{ secrets.ARGUS_AWS_SECRET_PRODUCTION }}
