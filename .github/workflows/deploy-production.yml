@@ -1,11 +1,11 @@
-# Deploy to production EKS cluster (account: 961743402154 / argus-prod / us-west-2).
-# Image is built and pushed to prod-account ECR directly (no cross-account replication).
+# Build and push the stock-ingestion base image to prod ECR (account: 961743402154 / ap-south-1).
+# CMD is overridden per task at ECS deployment time.
 name: Deploy Production
 
 on:
   push:
     branches:
-      - prod
+      - main
   workflow_dispatch:
 
 permissions:
@@ -23,73 +23,3 @@ jobs:
     secrets:
       aws_access_key_id: ${{ secrets.AWS_KEY_PROD }}
       aws_secret_access_key: ${{ secrets.AWS_SECRET_PROD }}
-
-  deploy:
-    name: Helm Deploy
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    environment: production
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'bernailab-prod-eks' }}
-      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'argus-prod' }}
-      HELM_RELEASE_NAME: ${{ vars.HELM_RELEASE_NAME || 'bcp-ingestion-pipeline-prod' }}
-      HELM_CHART_PATH: deploy/helm/bcp-ingestion-pipeline
-      ECR_REPOSITORY: stock-data-ingestion
-      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Verify branch
-        run: |
-          if [ "${GITHUB_REF_NAME}" != "prod" ] && [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]; then
-            echo "Production deploys must run from the prod branch."
-            exit 1
-          fi
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.15.4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_KEY_PROD }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_PROD }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
-
-      - name: Deploy with Helm
-        run: |
-          set -euo pipefail
-
-          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-          VALUE_ARGS=()
-          if [ -f "${HELM_CHART_PATH}/values.yaml" ]; then
-            VALUE_ARGS+=(--values "${HELM_CHART_PATH}/values.yaml")
-          fi
-          if [ -f "${HELM_CHART_PATH}/values-prod.yaml" ]; then
-            VALUE_ARGS+=(--values "${HELM_CHART_PATH}/values-prod.yaml")
-          fi
-
-          helm lint "${HELM_CHART_PATH}" "${VALUE_ARGS[@]}"
-
-          helm upgrade --install "${HELM_RELEASE_NAME}" "${HELM_CHART_PATH}" \
-            --namespace "${K8S_NAMESPACE}" \
-            --create-namespace \
-            "${VALUE_ARGS[@]}" \
-            --set "image.repository=${ECR_REGISTRY}/${ECR_REPOSITORY}" \
-            --set "image.tag=${IMAGE_TAG}" \
-            --atomic \
-            --timeout 10m \
-            --wait
-
-      - name: Verify deployed resources
-        run: |
-          kubectl get all,ingress,configmap,secret -n "${K8S_NAMESPACE}" -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME}" || true
