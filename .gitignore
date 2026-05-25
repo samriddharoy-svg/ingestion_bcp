@@ -1,6 +1,7 @@
 # Environment & Secrets
 .env
 *.env
+flyway.conf
 
 # Python
 __pycache__/

@@ -568,6 +568,68 @@ services:
         condition: service_completed_successfully
     networks:
       - bcp-network
+  # ========== AI Market Summary ==========
+  fetch-ai-summary-market:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-ai-summary-market
+    image: stock-ingestion-ai-summary-market:latest
+    container_name: bcp-ai-summary-market
+    environment:
+      - USE_RDS_DIRECT=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_bcp_db
+      - RDS_USER=ef_bcp_admin
+      - RDS_PASSWORD=admin@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - bcp-network
+    # ========== Upcoming Earnings ==========
+  fetch-upcomingearnings:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-upcomingearnings
+    image: stock-ingestion-upcomingearnings:latest
+    container_name: bcp-fetch-upcomingearnings
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_bcp_db
+      - RDS_USER=ef_bcp_admin
+      - RDS_PASSWORD=admin@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - bcp-network
+
+  # ========== Risk Scores ==========
+  fetch-risk-scores:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fetch-risk-scores
+    image: stock-ingestion-risk-scores:latest
+    container_name: bcp-fetch-risk-scores
+    environment:
+      - USE_RDS_DIRECT=true
+      - FMP_API_KEY=${FMP_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RDS_HOST=equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com
+      - RDS_PORT=5432
+      - RDS_SSL_MODE=require
+      - RDS_DATABASE=equities_first_bcp_db
+      - RDS_USER=ef_bcp_admin
+      - RDS_PASSWORD=admin@123!
+      - PYTHONUNBUFFERED=1
+    networks:
+      - bcp-network        
 
 
 networks:

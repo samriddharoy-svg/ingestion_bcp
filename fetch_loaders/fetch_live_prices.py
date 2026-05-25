@@ -1316,6 +1316,7 @@ Populates: ingest_db.stocks_price_data
 # PATH FIX
 # --------------------------------------------------
 import sys
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1326,22 +1327,63 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import time
 import requests
 import psycopg2
-from datetime import datetime
+import concurrent.futures
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from psycopg2.extras import execute_values
 
 from utils import get_connection
-from config import DATA_FETCH_CONFIG, FMP_API_KEY
+from config import FMP_API_KEY
 
 BASE_URL = "https://financialmodelingprep.com/stable"
 
-MAX_DEADLOCK_RETRIES = 3
-DEADLOCK_RETRY_DELAY = 2
+MAX_DEADLOCK_RETRIES    = 3
+DEADLOCK_RETRY_DELAY    = 2
+PRICE_FETCH_MAX_WORKERS = int(os.environ.get("PRICE_FETCH_MAX_WORKERS", "8"))
+YFINANCE_FALLBACK_PERIOD = os.environ.get("YFINANCE_FALLBACK_PERIOD", "max")
+
+# UAE tickers that fall back to StockAnalysis ADX scraper
+STOCKANALYSIS_ADX_SYMBOLS = {
+    "ALDAR.AD":  "ALDAR",
+    "ALDAR.AE":  "ALDAR",
+    "ALDAR.ADX": "ALDAR",
+    "ESHRAQ.AD":  "ESHRAQ",
+    "ESHRAQ.AE":  "ESHRAQ",
+    "ESHRAQ.ADX": "ESHRAQ",
+}
+
+_HTTP_SESSION = None
+
 
 # --------------------------------------------------
-# FETCH FROM FMP
+# SHARED HTTP SESSION (connection pooling + auto-retry)
+# --------------------------------------------------
+def _get_session():
+    global _HTTP_SESSION
+    if _HTTP_SESSION is None:
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=0.3,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _HTTP_SESSION = session
+    return _HTTP_SESSION
+
+
+# --------------------------------------------------
+# FETCH FROM FMP (primary)
 # --------------------------------------------------
 def fetch_fmp_historical_prices(ticker):
     try:
-        r = requests.get(
+        r = _get_session().get(
             f"{BASE_URL}/historical-price-eod/full",
             params={"symbol": ticker, "apikey": FMP_API_KEY},
             timeout=30,
@@ -1359,45 +1401,151 @@ def fetch_fmp_historical_prices(ticker):
         print(f"⚠ FMP error for {ticker}: {e}")
         return []
 
+
 # --------------------------------------------------
-# FETCH FROM YAHOO (SPECIAL CASE)
+# FETCH FROM YAHOO (primary for 6887.HK)
 # --------------------------------------------------
 def fetch_yahoo_historical_prices(ticker, days=30):
     try:
-        r = requests.get(
+        r = _get_session().get(
             f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={days}d",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=20,
         )
         r.raise_for_status()
 
-        data = r.json()
+        data   = r.json()
         result = data.get("chart", {}).get("result")
-
         if not result:
             return []
 
-        quotes = result[0]
+        quotes     = result[0]
         timestamps = quotes.get("timestamp") or []
         indicators = quotes.get("indicators", {}).get("quote", [{}])[0]
 
+        opens   = indicators.get("open")   or []
+        closes  = indicators.get("close")  or []
+        volumes = indicators.get("volume") or []
+
         records = []
         for i, ts in enumerate(timestamps):
+            if i >= len(opens) or i >= len(closes):
+                continue
             records.append({
-                "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d"),
-                "open": indicators.get("open", [None])[i],
-                "close": indicators.get("close", [None])[i],
-                "volume": indicators.get("volume", [None])[i],
+                "date":   datetime.fromtimestamp(ts).strftime("%Y-%m-%d"),
+                "open":   opens[i],
+                "close":  closes[i],
+                "volume": volumes[i] if i < len(volumes) else None,
             })
-
         return records
 
     except Exception as e:
         print(f"⚠ Yahoo error for {ticker}: {e}")
         return []
 
+
 # --------------------------------------------------
-# UPSERT SQL
+# FALLBACK 1: yfinance (when FMP returns nothing)
+# --------------------------------------------------
+def fetch_yfinance_historical_prices(ticker, period=None):
+    period = period or YFINANCE_FALLBACK_PERIOD
+    try:
+        import yfinance as yf
+
+        df = yf.Ticker(ticker).history(
+            period=period, interval="1d", auto_adjust=False, actions=False
+        )
+        if df is None or df.empty:
+            df = yf.download(
+                ticker, period=period, interval="1d",
+                auto_adjust=False, progress=False, threads=False,
+            )
+        if df is None or df.empty:
+            return []
+
+        records = []
+        for index, row in df.iterrows():
+            date_value  = getattr(index, "date", lambda: index)()
+            open_price  = row.get("Open")
+            close_price = row.get("Close")
+            volume      = row.get("Volume")
+            if open_price is None or close_price is None:
+                continue
+            if hasattr(open_price,  "item"): open_price  = open_price.item()
+            if hasattr(close_price, "item"): close_price = close_price.item()
+            if hasattr(volume,      "item"): volume      = volume.item()
+            records.append({
+                "date":   date_value.isoformat(),
+                "open":   open_price,
+                "close":  close_price,
+                "volume": None if volume != volume else volume,
+            })
+        return records
+
+    except Exception as e:
+        print(f"⚠ yfinance fallback error for {ticker}: {e}")
+        return []
+
+
+# --------------------------------------------------
+# FALLBACK 2: StockAnalysis ADX scraper (UAE only)
+# --------------------------------------------------
+def _parse_stockanalysis_number(value):
+    value = (value or "").strip().replace(",", "")
+    if value in {"", "-", "—", "N/A"}:
+        return None
+    return float(value)
+
+
+def _parse_stockanalysis_volume(value):
+    value = (value or "").strip().replace(",", "")
+    if value in {"", "-", "—", "N/A"}:
+        return None
+    return int(float(value))
+
+
+def fetch_stockanalysis_adx_prices(ticker):
+    adx_symbol = STOCKANALYSIS_ADX_SYMBOLS.get(ticker)
+    if not adx_symbol:
+        return []
+    try:
+        response = _get_session().get(
+            f"https://stockanalysis.com/quote/adx/{adx_symbol}/history/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        soup    = BeautifulSoup(response.text, "html.parser")
+        records = []
+        for row in soup.select("table tbody tr"):
+            cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 8:
+                continue
+            try:
+                price_date = datetime.strptime(cells[0], "%b %d, %Y").date().isoformat()
+            except ValueError:
+                try:
+                    price_date = datetime.strptime(cells[0], "%B %d, %Y").date().isoformat()
+                except ValueError:
+                    continue
+            open_price  = _parse_stockanalysis_number(cells[1])
+            close_price = _parse_stockanalysis_number(cells[4])
+            volume      = _parse_stockanalysis_volume(cells[7])
+            if open_price is None or close_price is None:
+                continue
+            records.append({
+                "date": price_date, "open": open_price,
+                "close": close_price, "volume": volume,
+            })
+        return records
+
+    except Exception as e:
+        print(f"⚠ StockAnalysis ADX fallback error for {ticker}: {e}")
+        return []
+
+
+# --------------------------------------------------
+# UPSERT SQL  (VALUES %s  →  bulk execute_values)
 # --------------------------------------------------
 upsert_sql = """
 INSERT INTO ingest_db.stocks_price_data (
@@ -1414,7 +1562,7 @@ INSERT INTO ingest_db.stocks_price_data (
     captured_at,
     price_date
 )
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+VALUES %s
 ON CONFLICT (stock_id, price_date)
 DO UPDATE SET
     price = EXCLUDED.price,
@@ -1427,110 +1575,134 @@ DO UPDATE SET
     captured_at = EXCLUDED.captured_at;
 """
 
+
+# --------------------------------------------------
+# FETCH + BUILD ROWS FOR ONE TICKER  (runs in thread)
+# --------------------------------------------------
+def _build_ticker_price_rows(ticker, stock_id, currency):
+    # --- choose primary source ---
+    if ticker == "6887.HK":
+        records = fetch_yahoo_historical_prices(ticker, 30)
+        source  = "Yahoo direct"
+    else:
+        records = fetch_fmp_historical_prices(ticker)
+        source  = "FMP"
+
+    # --- fallback 1: yfinance ---
+    if not records and ticker != "6887.HK":
+        print(f"  ⚠ FMP empty for {ticker}; trying yfinance")
+        records = fetch_yfinance_historical_prices(ticker)
+        source  = "yfinance"
+
+    # --- fallback 2: StockAnalysis ADX (UAE only) ---
+    if not records and ticker in STOCKANALYSIS_ADX_SYMBOLS:
+        print(f"  ⚠ yfinance empty for {ticker}; trying StockAnalysis ADX")
+        records = fetch_stockanalysis_adx_prices(ticker)
+        source  = "StockAnalysis ADX"
+
+    if not records:
+        return ticker, []
+
+    records.sort(key=lambda x: x.get("date") or "")
+    previous_close = None
+    # Today's midnight — date part is always "today", time part encodes price_date uniquely.
+    # This avoids UNIQUE(stock_id, captured_at) collisions with existing DB rows from
+    # previous runs while keeping the captured date as today's date.
+    today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = []
+
+    for r in records:
+        price_date = r.get("date")
+        open_p     = r.get("open")
+        close_p    = r.get("close")
+        vol        = r.get("volume")
+
+        if not price_date or open_p is None or close_p is None:
+            continue
+
+        if previous_close not in (None, 0):
+            delta     = close_p - previous_close
+            delta_pct = (delta / previous_close) * 100
+        else:
+            delta     = None
+            delta_pct = None
+        previous_close = close_p
+
+        # captured_at = today midnight + price_date ordinal as microseconds
+        # → date part is today, unique per price_date, deterministic across re-runs
+        captured_at = today_midnight + timedelta(
+            microseconds=datetime.fromisoformat(price_date).toordinal()
+        )
+
+        rows.append((
+            stock_id, close_p, open_p, close_p,
+            delta, currency, delta_pct, vol,
+            None, None, captured_at, price_date,
+        ))
+
+    if rows:
+        print(f"  → {ticker}: {len(rows)} rows [{source}]")
+    return ticker, rows
+
+
 # --------------------------------------------------
 # CORE FUNCTION
 # --------------------------------------------------
 def fetch_and_load_prices():
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
 
-    
     cur.execute("""
         SELECT stock_id, ticker, currency_code
         FROM ingest_db.stocks
         WHERE is_peer = false;
     """)
-
-    rows = cur.fetchall()
-
     stock_map = {
         ticker.strip().upper(): (stock_id, currency)
-        for stock_id, ticker, currency in rows
+        for stock_id, ticker, currency in cur.fetchall()
     }
-
     tickers = list(stock_map.keys())
 
     print(f"\nFetching historical prices for {len(tickers)} stocks\n")
 
+    jobs       = [(t, stock_map[t][0], stock_map[t][1]) for t in tickers]
+    all_rows   = []
     total_rows = 0
 
-    # --------------------------------------------------
-    # PROCESS EACH STOCK
-    # --------------------------------------------------
-    for ticker in tickers:
-        stock_id, currency = stock_map[ticker]
-
-        print(f"→ {ticker}")
-
-        try:
-            if ticker == "6887.HK":
-                records = fetch_yahoo_historical_prices(ticker)
-            else:
-                records = fetch_fmp_historical_prices(ticker)
-
-            if not records:
+    # fetch all tickers in parallel
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(PRICE_FETCH_MAX_WORKERS, max(1, len(jobs)))
+    ) as executor:
+        futures = {
+            executor.submit(_build_ticker_price_rows, t, sid, cur_): t
+            for t, sid, cur_ in jobs
+        }
+        for future in concurrent.futures.as_completed(futures):
+            ticker = futures[future]
+            try:
+                _, ticker_rows = future.result()
+            except Exception as e:
+                print(f"❌ Fatal ticker error {ticker}: {e}")
+                continue
+            if not ticker_rows:
                 print(f"  ⚠ No data for {ticker}")
                 continue
+            all_rows.extend(ticker_rows)
+            total_rows += len(ticker_rows)
 
-            records.sort(key=lambda x: x.get("date") or "")
-
-            previous_close = None
-
-            for r in records:
-                price_date = r.get("date")
-                open_p = r.get("open")
-                close_p = r.get("close")
-                vol = r.get("volume")
-
-                if not price_date or open_p is None or close_p is None:
-                    continue
-
-                if previous_close not in (None, 0):
-                    delta = close_p - previous_close
-                    delta_pct = (delta / previous_close) * 100
-                else:
-                    delta = None
-                    delta_pct = None
-
-                previous_close = close_p
-
-                # DEADLOCK SAFE INSERT
-                for attempt in range(1, MAX_DEADLOCK_RETRIES + 1):
-                    try:
-                        cur.execute(
-                            upsert_sql,
-                            (
-                                stock_id,
-                                close_p,
-                                open_p,
-                                close_p,
-                                delta,
-                                currency,
-                                delta_pct,
-                                vol,
-                                None,
-                                None,
-                                datetime.now(),
-                                price_date
-                            )
-                        )
-                        total_rows += 1
-                        break
-
-                    except psycopg2.errors.DeadlockDetected:
-                        conn.rollback()
-                        print(f"⚠ Deadlock retry {attempt} for {ticker}")
-                        time.sleep(DEADLOCK_RETRY_DELAY)
-
-                else:
-                    print(f"❌ Failed after retries for {ticker}")
-
-            conn.commit()
-            time.sleep(DATA_FETCH_CONFIG["rate_limit_delay"])
-
-        except Exception as e:
-            print(f"❌ Error for {ticker}: {e}")
-            continue
+    # bulk upsert all rows in one DB round-trip
+    if all_rows:
+        for attempt in range(1, MAX_DEADLOCK_RETRIES + 1):
+            try:
+                execute_values(cur, upsert_sql, all_rows, page_size=1000)
+                conn.commit()
+                break
+            except psycopg2.errors.DeadlockDetected:
+                conn.rollback()
+                print(f"⚠ Deadlock during bulk upsert retry {attempt}/{MAX_DEADLOCK_RETRIES}")
+                time.sleep(DEADLOCK_RETRY_DELAY)
+        else:
+            raise RuntimeError(f"Bulk upsert failed after {MAX_DEADLOCK_RETRIES} retries")
 
     cur.close()
     conn.close()
@@ -1538,6 +1710,7 @@ def fetch_and_load_prices():
     print("\n======================================")
     print(f"✓ Rows inserted / updated: {total_rows}")
     print("======================================\n")
+
 
 # --------------------------------------------------
 # ENTRY POINT
