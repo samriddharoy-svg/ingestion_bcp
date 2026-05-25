@@ -1,0 +1,58 @@
+{
+  "Comment": "Daily full RDS backup to S3 — runs pg_dump via Fargate and uploads to bcp-rds-backups-2026",
+  "StartAt": "BackupRDSToS3",
+  "States": {
+    "BackupRDSToS3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "arn:aws:ecs:ap-south-1:724134393175:cluster/stock-ingestion-cluster",
+        "TaskDefinition": "arn:aws:ecs:ap-south-1:724134393175:task-definition/stock-ingestion-backup:1",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["subnet-0e4f2c5296ec02766"],
+            "SecurityGroups": ["sg-044320384fd9e8681"],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "backup-rds",
+              "Environment": [
+                {
+                  "Name": "S3_BUCKET",
+                  "Value": "bcp-rds-backups-2026"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "BackupFailed"
+        }
+      ],
+      "Next": "BackupSucceeded"
+    },
+    "BackupSucceeded": {
+      "Type": "Succeed"
+    },
+    "BackupFailed": {
+      "Type": "Fail",
+      "Error": "BackupFailed",
+      "Cause": "RDS backup task failed — check CloudWatch logs /ecs/stock-data-backup"
+    }
+  }
+}
