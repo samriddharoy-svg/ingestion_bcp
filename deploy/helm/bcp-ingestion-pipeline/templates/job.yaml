@@ -1,0 +1,68 @@
+{{/*
+Optional one-shot Jobs (e.g. backfill runs). Render an entry under .Values.jobs
+to create one. Same shape as cronJobs minus schedule/suspend/concurrencyPolicy.
+*/}}
+{{- $top := . -}}
+{{- range $idx, $job := .Values.jobs }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-%s" (include "bcp-ingestion-pipeline.fullname" $top) $job.name | trunc 52 | trimSuffix "-" }}
+  labels:
+    {{- include "bcp-ingestion-pipeline.labels" $top | nindent 4 }}
+    app.kubernetes.io/component: {{ $job.name }}
+spec:
+  backoffLimit: {{ default 2 $job.backoffLimit }}
+  activeDeadlineSeconds: {{ default 3600 $job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "bcp-ingestion-pipeline.selectorLabels" $top | nindent 8 }}
+        app.kubernetes.io/component: {{ $job.name }}
+        {{- with $top.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "bcp-ingestion-pipeline.serviceAccountName" $top }}
+      restartPolicy: {{ default "OnFailure" $job.restartPolicy }}
+      {{- with $top.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $top.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $job.name }}
+          image: "{{ default $top.Values.image.repository (get $job.image "repository") }}:{{ default $top.Values.image.tag (get $job.image "tag") }}"
+          imagePullPolicy: {{ default $top.Values.image.pullPolicy (get $job.image "pullPolicy") }}
+          {{- with $top.Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $job.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $job.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            {{- include "bcp-ingestion-pipeline.envFrom" $top | nindent 12 }}
+          {{- with $job.env }}
+          env:
+            {{- range $k, $v := . }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- if $job.resources }}
+            {{- toYaml $job.resources | nindent 12 }}
+            {{- else }}
+            {{- toYaml $top.Values.defaultResources | nindent 12 }}
+            {{- end }}
+{{- end }}

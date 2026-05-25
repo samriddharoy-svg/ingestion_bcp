@@ -1,0 +1,6 @@
+apiVersion: v2
+name: bcp-ingestion-pipeline
+description: Helm chart for the BCP stock-data ingestion pipeline (CronJobs replacing EventBridge → Step Functions → ECS RunTask).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
