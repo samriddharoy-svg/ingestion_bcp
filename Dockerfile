@@ -125,16 +125,28 @@ CMD ["python", "fetch_loaders/fetch_ai_summary_portfolio.py"]
 FROM base AS fetch-correlation-matrix
 CMD ["python", "fetch_loaders/fetch_correlation_matrix.py"]
 
+# ---------- Image for backup_rds_to_s3 (needs pg_dump) ----------
+FROM base AS backup-rds
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+CMD ["python", "backup_rds_to_s3.py"]
+
 # ---------- Image for fetch_stockalert ----------
 FROM base AS fetch-stockalert
 CMD ["python", "fetch_loaders/fetch_stockalert.py"]
 
 
+# ---------- Image for fetch_ai_summary_market ----------
+FROM base AS fetch-ai-summary-market
+CMD ["python", "fetch_loaders/fetch_ai_summary_market.py"]
 
 
+# ---------- Image for fetch_upcomingearnings ----------
+FROM base AS fetch-upcomingearnings
+CMD ["python", "fetch_loaders/fetch_upcomingearnings.py"]
 
-
-
+# ---------- Image for fetch_risk_scores ----------
+FROM base AS fetch-risk-scores
+CMD ["python", "fetch_loaders/fetch_risk_scores.py"]
 
 
 

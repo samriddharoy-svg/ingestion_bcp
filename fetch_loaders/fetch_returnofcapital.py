@@ -622,45 +622,61 @@ def fetch_key_metrics_ttm(symbol: str):
 # --------------------------------------------------
 # CORE LOGIC
 # --------------------------------------------------
-def fetch_and_load_return_of_capital():
+def _write_stock_records(stock_id: int, records: list):
+    """Open a fresh DB connection, delete today's rows, insert new rows, commit, close.
+    Called after all API fetching for a stock is done — no DB connection is held
+    open during API calls, so RDS idle-timeout never fires.
+    """
+    insert_sql = """
+        INSERT INTO ingest_db.stocks_fundamentals
+        (stock_id, metric_type, metric_value, period_type, period_label, metric_category)
+        VALUES (%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (stock_id, metric_category, metric_type, period_type, period_label, captured_date)
+        DO NOTHING;
+    """
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
+    try:
+        cur.execute(
+            """
+            DELETE FROM ingest_db.stocks_fundamentals
+            WHERE stock_id = %s
+              AND metric_type IN ('Return On Assets', 'Return On Equity', 'Return on capital employed')
+              AND metric_category = 'Return of Capital'
+              AND captured_date = CURRENT_DATE
+            """,
+            (stock_id,),
+        )
+        cur.executemany(insert_sql, records)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
+
+def fetch_and_load_return_of_capital():
+    # Load stock list via a short-lived connection
+    conn = get_connection()
+    cur  = conn.cursor()
     tickers = list(set(TICKER_MAPPINGS.values()))
-
     cur.execute(
         """
         SELECT stock_id, ticker
         FROM ingest_db.stocks
-        WHERE ticker = ANY(%s)
+        WHERE ticker = ANY(%s) AND is_peer = false
         ORDER BY stock_id;
         """,
         (tickers,),
     )
-
     stocks = cur.fetchall()
+    cur.close()
+    conn.close()
 
     if not stocks:
         print("❌ No matching stocks found")
-        cur.close()
-        conn.close()
         return
 
-    insert_sql = """
-        INSERT INTO ingest_db.stocks_fundamentals
-        (
-            stock_id,
-            metric_type,
-            metric_value,
-            period_type,
-            period_label,
-            metric_category
-        )
-        VALUES (%s,%s,%s,%s,%s,%s)
-        ON CONFLICT DO NOTHING;
-    """
-
-    records = []
+    total_inserted = 0
 
     print(f"\nProcessing {len(stocks)} stocks (Return of Capital)\n")
 
@@ -669,6 +685,7 @@ def fetch_and_load_return_of_capital():
 
         q_rows = a_rows = ttm_rows = 0
         latest_q_label = None
+        records = []
 
         # ---------- QUARTERLY ----------
         q_data = fetch_key_metrics(ticker, "quarter")
@@ -677,19 +694,15 @@ def fetch_and_load_return_of_capital():
             date_ = r.get("date")
             if not date_:
                 continue
-
             label = quarter_label(date_)
-
             if r.get("returnOnAssets") is not None:
-                records.append((stock_id, "Return On Assets", r["returnOnAssets"], "Quarterly", label, "Ratios"))
+                records.append((stock_id, "Return On Assets", r["returnOnAssets"], "Quarterly", label, "Return of Capital"))
                 q_rows += 1
-
             if r.get("returnOnEquity") is not None:
-                records.append((stock_id, "Return On Equity", r["returnOnEquity"], "Quarterly", label, "Ratios"))
+                records.append((stock_id, "Return On Equity", r["returnOnEquity"], "Quarterly", label, "Return of Capital"))
                 q_rows += 1
-
             if r.get("returnOnCapitalEmployed") is not None:
-                records.append((stock_id, "Return on capital employed", r["returnOnCapitalEmployed"], "Quarterly", label, "Ratios"))
+                records.append((stock_id, "Return on capital employed", r["returnOnCapitalEmployed"], "Quarterly", label, "Return of Capital"))
                 q_rows += 1
 
         if q_data:
@@ -702,19 +715,15 @@ def fetch_and_load_return_of_capital():
             date_ = r.get("date")
             if not date_:
                 continue
-
             year = date_[:4]
-
             if r.get("returnOnAssets") is not None:
-                records.append((stock_id, "Return On Assets", r["returnOnAssets"], "Annual", year, "Ratios"))
+                records.append((stock_id, "Return On Assets", r["returnOnAssets"], "Annual", year, "Return of Capital"))
                 a_rows += 1
-
             if r.get("returnOnEquity") is not None:
-                records.append((stock_id, "Return On Equity", r["returnOnEquity"], "Annual", year, "Ratios"))
+                records.append((stock_id, "Return On Equity", r["returnOnEquity"], "Annual", year, "Return of Capital"))
                 a_rows += 1
-
             if r.get("returnOnCapitalEmployed") is not None:
-                records.append((stock_id, "Return on capital employed", r["returnOnCapitalEmployed"], "Annual", year, "Ratios"))
+                records.append((stock_id, "Return on capital employed", r["returnOnCapitalEmployed"], "Annual", year, "Return of Capital"))
                 a_rows += 1
 
         # ---------- TTM ----------
@@ -722,17 +731,14 @@ def fetch_and_load_return_of_capital():
 
         if ttm and latest_q_label:
             r = ttm[0]
-
             if r.get("returnOnAssetsTTM") is not None:
-                records.append((stock_id, "Return On Assets", r["returnOnAssetsTTM"], "Quarterly - TTM", latest_q_label, "Ratios"))
+                records.append((stock_id, "Return On Assets", r["returnOnAssetsTTM"], "Quarterly - TTM", latest_q_label, "Return of Capital"))
                 ttm_rows += 1
-
             if r.get("returnOnEquityTTM") is not None:
-                records.append((stock_id, "Return On Equity", r["returnOnEquityTTM"], "Quarterly - TTM", latest_q_label, "Ratios"))
+                records.append((stock_id, "Return On Equity", r["returnOnEquityTTM"], "Quarterly - TTM", latest_q_label, "Return of Capital"))
                 ttm_rows += 1
-
             if r.get("returnOnCapitalEmployedTTM") is not None:
-                records.append((stock_id, "Return on capital employed", r["returnOnCapitalEmployedTTM"], "Quarterly - TTM", latest_q_label, "Ratios"))
+                records.append((stock_id, "Return on capital employed", r["returnOnCapitalEmployedTTM"], "Quarterly - TTM", latest_q_label, "Return of Capital"))
                 ttm_rows += 1
 
         print(f"  Quarterly rows : {q_rows}")
@@ -740,16 +746,14 @@ def fetch_and_load_return_of_capital():
         print(f"  TTM rows       : {ttm_rows}")
         print(f"  ➜ Total rows   : {q_rows + a_rows + ttm_rows}")
 
+        # Fresh DB connection per stock — opened only after API calls finish
+        if records:
+            _write_stock_records(stock_id, records)
+            total_inserted += len(records)
+
         time.sleep(DATA_FETCH_CONFIG["rate_limit_delay"])
 
-    print(f"\nInserting {len(records)} Return of Capital rows...")
-    cur.executemany(insert_sql, records)
-    conn.commit()
-
-    print("✔ Return of Capital ingestion completed")
-
-    cur.close()
-    conn.close()
+    print(f"\n✔ Return of Capital ingestion completed — {total_inserted} rows inserted")
 
 # --------------------------------------------------
 # ENTRY POINT
