@@ -1324,6 +1324,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # --------------------------------------------------
 # IMPORTS
 # --------------------------------------------------
+import threading
 import time
 import requests
 import psycopg2
@@ -1343,6 +1344,11 @@ MAX_DEADLOCK_RETRIES    = 3
 DEADLOCK_RETRY_DELAY    = 2
 PRICE_FETCH_MAX_WORKERS = int(os.environ.get("PRICE_FETCH_MAX_WORKERS", "8"))
 YFINANCE_FALLBACK_PERIOD = os.environ.get("YFINANCE_FALLBACK_PERIOD", "max")
+
+# Max concurrent FMP calls and per-call delay to stay within rate limits
+FMP_CONCURRENCY   = int(float(os.environ.get("FMP_CONCURRENCY", "3")))
+FMP_CALL_DELAY    = float(os.environ.get("FMP_CALL_DELAY", "0.4"))
+_fmp_semaphore    = threading.Semaphore(FMP_CONCURRENCY)
 
 # UAE tickers that fall back to StockAnalysis ADX scraper
 STOCKANALYSIS_ADX_SYMBOLS = {
@@ -1382,24 +1388,27 @@ def _get_session():
 # FETCH FROM FMP (primary)
 # --------------------------------------------------
 def fetch_fmp_historical_prices(ticker):
-    try:
-        r = _get_session().get(
-            f"{BASE_URL}/historical-price-eod/full",
-            params={"symbol": ticker, "apikey": FMP_API_KEY},
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json()
+    with _fmp_semaphore:
+        try:
+            r = _get_session().get(
+                f"{BASE_URL}/historical-price-eod/full",
+                params={"symbol": ticker, "apikey": FMP_API_KEY},
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
 
-        if isinstance(data, dict):
-            return data.get("historical", []) or []
-        elif isinstance(data, list):
-            return data
-        return []
+            if isinstance(data, dict):
+                return data.get("historical", []) or []
+            elif isinstance(data, list):
+                return data
+            return []
 
-    except Exception as e:
-        print(f"⚠ FMP error for {ticker}: {e}")
-        return []
+        except Exception as e:
+            print(f"⚠ FMP error for {ticker}: {e}")
+            return []
+        finally:
+            time.sleep(FMP_CALL_DELAY)
 
 
 # --------------------------------------------------
