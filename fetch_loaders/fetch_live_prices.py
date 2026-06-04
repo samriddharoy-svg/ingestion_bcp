@@ -1569,7 +1569,10 @@ INSERT INTO ingest_db.stocks_price_data (
     volume_30d,
     market_cap,
     captured_at,
-    price_date
+    price_date,
+    yfinance_closing_price,
+    yfinance_close_price_change_pct,
+    yfinance_close_price_change
 )
 VALUES %s
 ON CONFLICT (stock_id, price_date)
@@ -1581,8 +1584,53 @@ DO UPDATE SET
     day_price_change_pct = EXCLUDED.day_price_change_pct,
     currency_code = EXCLUDED.currency_code,
     volume = EXCLUDED.volume,
-    captured_at = EXCLUDED.captured_at;
+    captured_at = EXCLUDED.captured_at,
+    yfinance_closing_price = EXCLUDED.yfinance_closing_price,
+    yfinance_close_price_change_pct = EXCLUDED.yfinance_close_price_change_pct,
+    yfinance_close_price_change = EXCLUDED.yfinance_close_price_change;
 """
+
+
+# --------------------------------------------------
+# DEDICATED YFINANCE LOOKUP  (date → yfinance values)
+# --------------------------------------------------
+def _fetch_yfinance_date_map(ticker):
+    """
+    Fetch yfinance history and return {price_date: (closing_price, change, change_pct)}.
+    Calculations mirror the FMP day-over-day logic exactly:
+      change     = close_t - close_t-1
+      change_pct = (change / close_t-1) * 100
+    """
+    try:
+        records = fetch_yfinance_historical_prices(ticker)
+    except Exception:
+        return {}
+
+    if not records:
+        return {}
+
+    records.sort(key=lambda x: x.get("date") or "")
+    previous_close = None
+    date_map = {}
+
+    for r in records:
+        price_date = r.get("date")
+        close_p    = r.get("close")
+
+        if not price_date or close_p is None:
+            continue
+
+        if previous_close not in (None, 0):
+            yf_change     = close_p - previous_close
+            yf_change_pct = (yf_change / previous_close) * 100
+        else:
+            yf_change     = None
+            yf_change_pct = None
+        previous_close = close_p
+
+        date_map[price_date] = (close_p, yf_change, yf_change_pct)
+
+    return date_map
 
 
 # --------------------------------------------------
@@ -1612,6 +1660,29 @@ def _build_ticker_price_rows(ticker, stock_id, currency):
     if not records:
         return ticker, []
 
+    # --- dedicated yfinance fetch for the three yfinance columns ---
+    # If yfinance is already the primary source, build the map from existing records
+    # to avoid a redundant network call; otherwise call the dedicated function.
+    if source == "yfinance":
+        yf_records = records
+        yf_records.sort(key=lambda x: x.get("date") or "")
+        prev = None
+        yf_date_map = {}
+        for r in yf_records:
+            d  = r.get("date")
+            cp = r.get("close")
+            if not d or cp is None:
+                continue
+            if prev not in (None, 0):
+                ch     = cp - prev
+                ch_pct = (ch / prev) * 100
+            else:
+                ch = ch_pct = None
+            prev = cp
+            yf_date_map[d] = (cp, ch, ch_pct)
+    else:
+        yf_date_map = _fetch_yfinance_date_map(ticker)
+
     records.sort(key=lambda x: x.get("date") or "")
     previous_close = None
     # Today's midnight — date part is always "today", time part encodes price_date uniquely.
@@ -1629,6 +1700,7 @@ def _build_ticker_price_rows(ticker, stock_id, currency):
         if not price_date or open_p is None or close_p is None:
             continue
 
+        # FMP day-over-day calculations (unchanged)
         if previous_close not in (None, 0):
             delta     = close_p - previous_close
             delta_pct = (delta / previous_close) * 100
@@ -1636,6 +1708,12 @@ def _build_ticker_price_rows(ticker, stock_id, currency):
             delta     = None
             delta_pct = None
         previous_close = close_p
+
+        # yfinance columns from the dedicated date map
+        yf_entry      = yf_date_map.get(price_date)
+        yf_close      = yf_entry[0] if yf_entry else None
+        yf_change     = yf_entry[1] if yf_entry else None
+        yf_change_pct = yf_entry[2] if yf_entry else None
 
         # captured_at = today midnight + price_date ordinal as microseconds
         # → date part is today, unique per price_date, deterministic across re-runs
@@ -1647,6 +1725,7 @@ def _build_ticker_price_rows(ticker, stock_id, currency):
             stock_id, close_p, open_p, close_p,
             delta, currency, delta_pct, vol,
             None, None, captured_at, price_date,
+            yf_close, yf_change_pct, yf_change,
         ))
 
     if rows:
