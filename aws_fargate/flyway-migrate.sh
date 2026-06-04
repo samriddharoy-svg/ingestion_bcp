@@ -2,10 +2,10 @@
 # Run this in AWS CloudShell whenever you have new DDL migrations to apply.
 # It skips migrations already applied and only runs new ones.
 
-RDS_HOST="equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com"
-RDS_DB="equities_first_bcp_db"
-RDS_USER="ef_bcp_admin"
-RDS_PASS="admin@123!"
+RDS_HOST="bernailab-dev-postgres.c9gsc4m26hgn.ap-south-1.rds.amazonaws.com"
+RDS_DB="app"
+RDS_USER="infra_admin"
+RDS_PASS='nVH#r0F_6lc!gfU>LJ<u?byQK?7S'
 SCHEMAS="ingest_db,transform_db,semantic_db"
 
 JDBC_URL="jdbc:postgresql://${RDS_HOST}:5432/${RDS_DB}"
