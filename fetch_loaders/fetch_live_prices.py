@@ -1456,21 +1456,32 @@ def fetch_yahoo_historical_prices(ticker, days=30):
 # --------------------------------------------------
 # FALLBACK 1: yfinance (when FMP returns nothing)
 # --------------------------------------------------
-def fetch_yfinance_historical_prices(ticker, period=None):
+def fetch_yfinance_historical_prices(ticker, period=None, quiet=False):
     period = period or YFINANCE_FALLBACK_PERIOD
     try:
         import yfinance as yf
 
-        df = yf.Ticker(ticker).history(
-            period=period, interval="1d", auto_adjust=False, actions=False
-        )
+        df = None
+
+        # Try Ticker.history() — works in both yfinance v0.1 and v0.2
+        try:
+            df = yf.Ticker(ticker).history(period=period, interval="1d")
+        except Exception:
+            df = None
+
+        # Fallback to yf.download() without deprecated params
         if df is None or df.empty:
-            df = yf.download(
-                ticker, period=period, interval="1d",
-                auto_adjust=False, progress=False, threads=False,
-            )
+            try:
+                df = yf.download(ticker, period=period, interval="1d", progress=False)
+            except Exception:
+                df = None
+
         if df is None or df.empty:
             return []
+
+        # yfinance ≥0.2 returns MultiIndex columns ("Close", "TICKER") — flatten them
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
 
         records = []
         for index, row in df.iterrows():
@@ -1492,7 +1503,8 @@ def fetch_yfinance_historical_prices(ticker, period=None):
         return records
 
     except Exception as e:
-        print(f"⚠ yfinance fallback error for {ticker}: {e}")
+        if not quiet:
+            print(f"⚠ yfinance fallback error for {ticker}: {e}")
         return []
 
 
@@ -1585,40 +1597,78 @@ DO UPDATE SET
     currency_code = EXCLUDED.currency_code,
     volume = EXCLUDED.volume,
     captured_at = EXCLUDED.captured_at,
-    yfinance_closing_price = EXCLUDED.yfinance_closing_price,
-    yfinance_close_price_change_pct = EXCLUDED.yfinance_close_price_change_pct,
-    yfinance_close_price_change = EXCLUDED.yfinance_close_price_change;
+    yfinance_closing_price = COALESCE(EXCLUDED.yfinance_closing_price, stocks_price_data.yfinance_closing_price),
+    yfinance_close_price_change_pct = COALESCE(EXCLUDED.yfinance_close_price_change_pct, stocks_price_data.yfinance_close_price_change_pct),
+    yfinance_close_price_change = COALESCE(EXCLUDED.yfinance_close_price_change, stocks_price_data.yfinance_close_price_change);
 """
 
 
 # --------------------------------------------------
 # DEDICATED YFINANCE LOOKUP  (date → yfinance values)
 # --------------------------------------------------
+# FMP ticker suffix → Yahoo Finance suffix mapping for exchanges that differ
+_YF_SUFFIX_MAP = {
+    ".AD":  ".AE",   # Abu Dhabi → Yahoo uses .AE
+    ".ADX": ".AE",
+    ".KQ":  ".KQ",   # KOSDAQ — same
+    ".SS":  ".SS",   # Shanghai — same
+    ".SZ":  ".SZ",   # Shenzhen — same
+}
+
+
+def _to_yahoo_ticker(ticker):
+    """Convert FMP ticker format to Yahoo Finance format where they differ."""
+    for fmp_suffix, yf_suffix in _YF_SUFFIX_MAP.items():
+        if ticker.endswith(fmp_suffix):
+            return ticker[: -len(fmp_suffix)] + yf_suffix
+    return ticker
+
+
 def _fetch_yfinance_date_map(ticker):
     """
-    Fetch yfinance history and return {price_date: (closing_price, change, change_pct)}.
-    Calculations mirror the FMP day-over-day logic exactly:
-      change     = close_t - close_t-1
-      change_pct = (change / close_t-1) * 100
+    Fetch full price history via direct Yahoo Finance API (no yfinance library).
+    Returns {price_date: (closing_price, change, change_pct)}.
+    Using direct HTTP makes behaviour identical across all machines regardless of
+    yfinance version.
     """
+    yf_ticker = _to_yahoo_ticker(ticker)
     try:
-        records = fetch_yfinance_historical_prices(ticker)
+        r = _get_session().get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}",
+            params={"interval": "1d", "range": "max"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        result = r.json().get("chart", {}).get("result")
+        if not result:
+            return {}
+
+        quotes     = result[0]
+        timestamps = quotes.get("timestamp") or []
+        closes     = quotes.get("indicators", {}).get("quote", [{}])[0].get("close") or []
+
+        records = []
+        for i, ts in enumerate(timestamps):
+            if i >= len(closes) or closes[i] is None:
+                continue
+            records.append({
+                "date":  datetime.fromtimestamp(ts).strftime("%Y-%m-%d"),
+                "close": closes[i],
+            })
     except Exception:
         return {}
 
     if not records:
         return {}
 
-    records.sort(key=lambda x: x.get("date") or "")
+    records.sort(key=lambda x: x["date"])
     previous_close = None
     date_map = {}
 
     for r in records:
-        price_date = r.get("date")
-        close_p    = r.get("close")
-
-        if not price_date or close_p is None:
-            continue
+        price_date = r["date"]
+        close_p    = r["close"]
 
         if previous_close not in (None, 0):
             yf_change     = close_p - previous_close
