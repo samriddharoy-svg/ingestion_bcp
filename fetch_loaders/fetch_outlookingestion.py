@@ -21,10 +21,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # --------------------------------------------------
 # IMPORTS
 # --------------------------------------------------
+import time
 import requests
-import psycopg2
 from datetime import datetime
 
+from utils import get_connection
 from config import TICKER_MAPPINGS, FMP_API_KEY, DATA_FETCH_CONFIG
 
 BASE_URL = "https://financialmodelingprep.com/stable"
@@ -60,21 +61,10 @@ def fetch_estimates(symbol: str, period: str):
 # CORE LOGIC
 # --------------------------------------------------
 def fetch_and_load_earnings_outlook():
-    conn = psycopg2.connect(
-        host="equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com",
-        port=5432,
-        dbname="equities_first_dev_db",
-        user="ef_dev_user_rw",
-        password="ef_dev_user_rw@123!",
-        sslmode="require",
-    )
-    cur = conn.cursor()
-
-    # ----------------------------------------------
-    # Load stocks from TICKER_MAPPINGS
-    # ----------------------------------------------
+    # Short-lived connection just to load the stock list
+    conn = get_connection()
+    cur  = conn.cursor()
     tickers = list(set(TICKER_MAPPINGS.values()))
-
     cur.execute(
         """
         SELECT stock_id, ticker
@@ -84,18 +74,14 @@ def fetch_and_load_earnings_outlook():
         """,
         (tickers,),
     )
-
     stocks = cur.fetchall()
+    cur.close()
+    conn.close()
 
     if not stocks:
         print("❌ No matching stocks found for given tickers")
-        cur.close()
-        conn.close()
         return
 
-    # ----------------------------------------------
-    # INSERT SQL
-    # ----------------------------------------------
     insert_sql = """
         INSERT INTO ingest_db.stocks_earnings_outlook
         (
@@ -112,18 +98,16 @@ def fetch_and_load_earnings_outlook():
         ON CONFLICT DO NOTHING;
     """
 
-    records = []
+    total_inserted = 0
 
     print(f"\nProcessing {len(stocks)} stocks (Earnings Outlook)...\n")
 
-    # ----------------------------------------------
-    # PROCESS EACH STOCK
-    # ----------------------------------------------
     for stock_id, ticker in stocks:
         print(f"Processing {ticker}...")
 
         q_rows = 0
         a_rows = 0
+        records = []
 
         # ---------- QUARTERLY ----------
         data_q = fetch_estimates(ticker, "quarter")
@@ -189,7 +173,6 @@ def fetch_and_load_earnings_outlook():
                 ))
                 a_rows += 1
 
-        # ---------- PRINT SUMMARY ----------
         if q_rows == 0 and a_rows == 0:
             print("  ⚠ No earnings outlook data fetched")
         else:
@@ -197,17 +180,21 @@ def fetch_and_load_earnings_outlook():
             print(f"  Annual rows    : {a_rows}")
             print(f"  ➜ Total rows   : {q_rows + a_rows}")
 
-    # ----------------------------------------------
-    # BULK INSERT
-    # ----------------------------------------------
-    print(f"\nInserting {len(records)} earnings outlook rows...")
-    cur.executemany(insert_sql, records)
-    conn.commit()
+        # Fresh DB connection per stock — opened only after API calls finish
+        if records:
+            conn = get_connection()
+            cur  = conn.cursor()
+            try:
+                cur.executemany(insert_sql, records)
+                conn.commit()
+                total_inserted += len(records)
+            finally:
+                cur.close()
+                conn.close()
 
-    print("✔ Earnings outlook ingestion completed")
+        time.sleep(DATA_FETCH_CONFIG["rate_limit_delay"])
 
-    cur.close()
-    conn.close()
+    print(f"\n✔ Earnings outlook ingestion completed — {total_inserted} rows inserted")
 
 
 # --------------------------------------------------

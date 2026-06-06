@@ -16,7 +16,8 @@ from pathlib import Path
 
 # Add project root to PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import AWS_RDS, TICKER_MAPPINGS, OPENAI_API_KEY, FMP_API_KEY
+from config import TICKER_MAPPINGS, OPENAI_API_KEY, FMP_API_KEY
+from utils import get_connection
 
 
 warnings.filterwarnings('ignore')
@@ -28,18 +29,9 @@ BASE_URL = "https://financialmodelingprep.com/stable"
 EPSILON = 1e-8
 
 
-DB_CONFIG = {
-    "host": AWS_RDS["host"],
-    "port": AWS_RDS["port"],
-    "dbname": AWS_RDS["database"],
-    "user": AWS_RDS["user"],
-    "password": AWS_RDS["password"],
-    "sslmode": AWS_RDS["sslmode"],
-}
-
 def _fetch_stocks():
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT stock_id, ticker, company_name
@@ -728,7 +720,7 @@ def push_alerts_to_database(alerts_df, dry_run=False):
     conn = None
     try:
         print("\n→ Connecting to database...")
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cursor = conn.cursor()
         print("  ✓ Connected")
 

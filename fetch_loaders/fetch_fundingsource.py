@@ -18,26 +18,18 @@ import pandas as pd
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import AWS_RDS, FMP_API_KEY as _FMP_API_KEY
+from config import FMP_API_KEY as _FMP_API_KEY
+from utils import get_connection
 
 FMP_API_KEY = _FMP_API_KEY
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
-
-DB_CONFIG = {
-    'host': AWS_RDS['host'],
-    'port': AWS_RDS['port'],
-    'dbname': AWS_RDS['database'],
-    'user': AWS_RDS['user'],
-    'password': AWS_RDS['password'],
-    'sslmode': AWS_RDS['sslmode'],
-}
 
 # Tickers that require yfinance fallback (FMP has no data)
 _YFINANCE_TICKERS = {"6887.HK"}
 
 def _fetch_stocks():
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT stock_id, ticker, company_name
@@ -270,7 +262,7 @@ def extract_metrics_yfinance(cash_flow_data: List[dict], period_type: str) -> Li
 
 def get_db_connection():
     """Get database connection."""
-    return psycopg2.connect(**DB_CONFIG)
+    return get_connection()
 
 
 def get_existing_records(cur, stock_id: int) -> set:
