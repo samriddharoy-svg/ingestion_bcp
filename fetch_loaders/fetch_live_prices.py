@@ -1350,6 +1350,11 @@ FMP_CONCURRENCY   = int(float(os.environ.get("FMP_CONCURRENCY", "3")))
 FMP_CALL_DELAY    = float(os.environ.get("FMP_CALL_DELAY", "0.4"))
 _fmp_semaphore    = threading.Semaphore(FMP_CONCURRENCY)
 
+# Yahoo Finance — limit to 2 concurrent calls with a small delay to avoid rate limiting
+YF_CONCURRENCY  = int(float(os.environ.get("YF_CONCURRENCY", "2")))
+YF_CALL_DELAY   = float(os.environ.get("YF_CALL_DELAY", "0.5"))
+_yf_semaphore   = threading.Semaphore(YF_CONCURRENCY)
+
 # UAE tickers that fall back to StockAnalysis ADX scraper
 STOCKANALYSIS_ADX_SYMBOLS = {
     "ALDAR.AD":  "ALDAR",
@@ -1628,47 +1633,65 @@ def _fetch_yfinance_date_map(ticker):
     """
     Fetch full price history via direct Yahoo Finance API (no yfinance library).
     Returns {price_date: (closing_price, change, change_pct)}.
-    Using direct HTTP makes behaviour identical across all machines regardless of
-    yfinance version.
+    Uses UTC dates so they match FMP's price_date strings exactly.
+    Semaphore + delay prevents Yahoo Finance rate limiting across parallel threads.
     """
     yf_ticker = _to_yahoo_ticker(ticker)
-    try:
-        r = _get_session().get(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}",
-            params={"interval": "1d", "range": "max"},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20,
-        )
-        r.raise_for_status()
-        result = r.json().get("chart", {}).get("result")
-        if not result:
+    with _yf_semaphore:
+        try:
+            # Use explicit period1/period2 instead of range=max.
+            # range=max silently caps at ~45 data points for some tickers; explicit
+            # timestamps force Yahoo Finance to return the full available history.
+            import time as _t
+            params = {
+                "interval": "1d",
+                "period1": 946684800,   # 2000-01-01 UTC — before any portfolio stock
+                "period2": int(_t.time()),
+            }
+            r = _get_session().get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}",
+                params=params,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            result = r.json().get("chart", {}).get("result")
+            if not result:
+                return {}
+
+            quotes     = result[0]
+            timestamps = quotes.get("timestamp") or []
+            closes     = quotes.get("indicators", {}).get("quote", [{}])[0].get("close") or []
+
+            records = []
+            for i, ts in enumerate(timestamps):
+                if i >= len(closes) or closes[i] is None:
+                    continue
+                from datetime import timezone as _tz
+                records.append({
+                    "date":  datetime.fromtimestamp(ts, tz=_tz.utc).strftime("%Y-%m-%d"),
+                    "close": closes[i],
+                })
+        except Exception:
             return {}
-
-        quotes     = result[0]
-        timestamps = quotes.get("timestamp") or []
-        closes     = quotes.get("indicators", {}).get("quote", [{}])[0].get("close") or []
-
-        records = []
-        for i, ts in enumerate(timestamps):
-            if i >= len(closes) or closes[i] is None:
-                continue
-            records.append({
-                "date":  datetime.fromtimestamp(ts).strftime("%Y-%m-%d"),
-                "close": closes[i],
-            })
-    except Exception:
-        return {}
+        finally:
+            time.sleep(YF_CALL_DELAY)
 
     if not records:
         return {}
 
-    records.sort(key=lambda x: x["date"])
+    # Deduplicate: Yahoo Finance sometimes returns two entries for the same date
+    # (intraday + EOD). Keep the last close per date so the day-over-day change
+    # is computed against the actual previous trading day, not a same-day duplicate.
+    deduped = {}
+    for r in records:
+        deduped[r["date"]] = r["close"]
+
     previous_close = None
     date_map = {}
 
-    for r in records:
-        price_date = r["date"]
-        close_p    = r["close"]
+    for price_date in sorted(deduped):
+        close_p = deduped[price_date]
 
         if previous_close not in (None, 0):
             yf_change     = close_p - previous_close
