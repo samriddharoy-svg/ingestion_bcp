@@ -1680,13 +1680,18 @@ def _fetch_yfinance_date_map(ticker):
     if not records:
         return {}
 
-    records.sort(key=lambda x: x["date"])
+    # Deduplicate: Yahoo Finance sometimes returns two entries for the same date
+    # (intraday + EOD). Keep the last close per date so the day-over-day change
+    # is computed against the actual previous trading day, not a same-day duplicate.
+    deduped = {}
+    for r in records:
+        deduped[r["date"]] = r["close"]
+
     previous_close = None
     date_map = {}
 
-    for r in records:
-        price_date = r["date"]
-        close_p    = r["close"]
+    for price_date in sorted(deduped):
+        close_p = deduped[price_date]
 
         if previous_close not in (None, 0):
             yf_change     = close_p - previous_close
