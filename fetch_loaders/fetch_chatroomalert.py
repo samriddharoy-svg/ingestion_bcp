@@ -1,10 +1,14 @@
-import os
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import psycopg2
 from psycopg2.extras import execute_batch
 import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils import get_connection
 
 # Configuration
 
@@ -18,19 +22,9 @@ API_CONFIG = {
     'timeout': 30
 }
 
-# DB Config — reads from env vars, falls back to dev DB defaults
-DB_CONFIG = {
-    'host': os.getenv('RDS_HOST', 'equities-first-dev-db.craa4kqs0ndo.ap-south-1.rds.amazonaws.com'),
-    'port': int(os.getenv('RDS_PORT', '5432')),
-    'database': os.getenv('RDS_DATABASE', 'equities_first_dev_db'),
-    'user': os.getenv('RDS_USER', 'ef_dev_user_rw'),
-    'password': os.getenv('RDS_PASSWORD', 'ef_dev_user_rw@123!'),
-    'sslmode': os.getenv('RDS_SSL_MODE', 'require')
-}
-
 def _fetch_stocks():
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT stock_id, ticker, company_name
@@ -592,7 +586,7 @@ def push_chatroom_alerts_to_db(alerts_df, dry_run=True):
     conn = None
     try:
         print("\n Connecting to database...")
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cursor = conn.cursor()
         print("  Connected")
 

@@ -37,21 +37,9 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 # from config import AWS_RDS, FMP_API_KEY, FMP_BASE_URL
 
 
-# ✅ IMPORT FROM YOUR CONFIG
-from config import AWS_RDS, FMP_API_KEY, FMP_BASE_URL
+from config import FMP_API_KEY, FMP_BASE_URL
+from utils import get_connection
 FMP_BASE_URL = "https://financialmodelingprep.com/stable/historical-price-eod/full"
-
-# -------------------------------------------------------
-# DB CONFIG from config.py
-# -------------------------------------------------------
-DB_CONFIG = {
-    'host': AWS_RDS['host'],
-    'port': AWS_RDS['port'],
-    'database': AWS_RDS['database'],
-    'user': AWS_RDS['user'],
-    'password': AWS_RDS['password'],
-    'sslmode': AWS_RDS['sslmode']
-}
 
 LOOKBACK_DAYS = 365
 
@@ -64,7 +52,7 @@ def fetch_stock_config_from_db():
     Falls back to _FALLBACK_STOCK_CONFIG on DB error.
     """
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cur = conn.cursor()
 
         cur.execute("""
@@ -572,7 +560,7 @@ def push_to_database(all_records, dry_run=True):
     conn = None
     try:
         print("\n→ Connecting to database...")
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = get_connection()
         cursor = conn.cursor()
         print("  ✓ Connected")
         
