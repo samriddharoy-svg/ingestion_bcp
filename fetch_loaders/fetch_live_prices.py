@@ -1421,8 +1421,17 @@ def fetch_fmp_historical_prices(ticker):
 # --------------------------------------------------
 def fetch_yahoo_historical_prices(ticker, days=30):
     try:
+        if days is None:
+            params = {
+                "interval": "1d",
+                "period1": 946684800,   # 2000-01-01 UTC
+                "period2": int(time.time()),
+            }
+        else:
+            params = {"interval": "1d", "range": f"{days}d"}
         r = _get_session().get(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={days}d",
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+            params=params,
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=20,
         )
@@ -1718,15 +1727,21 @@ def _build_ticker_price_rows(ticker, stock_id, currency):
         records = fetch_fmp_historical_prices(ticker)
         source  = "FMP"
 
-    # --- fallback 1: yfinance ---
+    # --- fallback 1: yfinance library ---
     if not records and ticker != "6887.HK":
         print(f"  ⚠ FMP empty for {ticker}; trying yfinance")
         records = fetch_yfinance_historical_prices(ticker)
         source  = "yfinance"
 
-    # --- fallback 2: StockAnalysis ADX (UAE only) ---
+    # --- fallback 2: direct Yahoo Finance API (no library, works on AWS) ---
+    if not records and ticker != "6887.HK":
+        print(f"  ⚠ yfinance empty for {ticker}; trying Yahoo direct")
+        records = fetch_yahoo_historical_prices(_to_yahoo_ticker(ticker), days=None)
+        source  = "Yahoo direct"
+
+    # --- fallback 3: StockAnalysis ADX (UAE only) ---
     if not records and ticker in STOCKANALYSIS_ADX_SYMBOLS:
-        print(f"  ⚠ yfinance empty for {ticker}; trying StockAnalysis ADX")
+        print(f"  ⚠ Yahoo direct empty for {ticker}; trying StockAnalysis ADX")
         records = fetch_stockanalysis_adx_prices(ticker)
         source  = "StockAnalysis ADX"
 
@@ -1734,9 +1749,9 @@ def _build_ticker_price_rows(ticker, stock_id, currency):
         return ticker, []
 
     # --- dedicated yfinance fetch for the three yfinance columns ---
-    # If yfinance is already the primary source, build the map from existing records
-    # to avoid a redundant network call; otherwise call the dedicated function.
-    if source == "yfinance":
+    # When Yahoo Finance (library or direct) is already the source, build the map
+    # from the fetched records to avoid a redundant API call.
+    if source in ("yfinance", "Yahoo direct"):
         yf_records = records
         yf_records.sort(key=lambda x: x.get("date") or "")
         prev = None

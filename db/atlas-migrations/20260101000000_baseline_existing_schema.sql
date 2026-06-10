@@ -1,0 +1,12 @@
+-- Atlas baseline marker — DO NOT MODIFY
+--
+-- This file represents the existing schema state as of 2026-01-01.
+-- The actual schema already exists in the database (ingest_db, transform_db, semantic_db).
+-- Atlas uses --baseline 20260101000000 on first run to skip this file
+-- and mark it as already applied without executing it.
+--
+-- To regenerate the full schema snapshot run:
+--   atlas schema inspect \
+--     --url "postgresql://infra_admin:...@.../app?sslmode=require" \
+--     --schema ingest_db,transform_db,semantic_db \
+--     --format "{{ sql . }}" > db/atlas-migrations/20260101000000_baseline_existing_schema.sql
