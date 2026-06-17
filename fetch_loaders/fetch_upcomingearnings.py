@@ -1,203 +1,3 @@
-# """
-# Fetch upcoming earnings for stocks
-# Populates: ingest_db.stocks_upcoming_earnings
-
-# ✔ Uses Yahoo Finance for earnings dates
-# ✔ Uses FMP → fallback to Yahoo for market cap
-# ✔ ECS / Docker / Step Functions compatible
-# """
-
-# import sys
-# from pathlib import Path
-# from datetime import datetime
-# import requests
-# import yfinance as yf
-# import pandas as pd
-
-# # --------------------------------------------------
-# # Path setup
-# # --------------------------------------------------
-# sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# # --------------------------------------------------
-# # Imports
-# # --------------------------------------------------
-# from utils import get_connection
-# from config import (
-#     FMP_API_KEY,
-#     TICKER_MAPPINGS,
-# )
-
-# # --------------------------------------------------
-# # Helpers
-# # --------------------------------------------------
-# def fetch_market_cap_fmp(ticker: str):
-#     try:
-#         r = requests.get(
-#             "https://financialmodelingprep.com/stable/market-capitalization",
-#             params={"symbol": ticker, "apikey": FMP_API_KEY},
-#             timeout=20
-#         )
-#         r.raise_for_status()
-#         data = r.json()
-#         return data[0]["marketCap"] if data else None
-#     except Exception:
-#         return None
-
-
-# def fetch_market_cap_yf(ticker: str):
-#     try:
-#         return yf.Ticker(ticker).info.get("marketCap")
-#     except Exception:
-#         return None
-
-
-# # --------------------------------------------------
-# # Fetch earnings data
-# # --------------------------------------------------
-# def fetch_upcoming_earnings():
-#     tickers = list(TICKER_MAPPINGS.keys())
-#     rows = []
-
-#     print(f"\n📊 Fetching upcoming earnings for {len(tickers)} stocks\n")
-
-#     for idx, ticker in enumerate(tickers, 1):
-#         print(f"[{idx}/{len(tickers)}] {ticker}", end=" ")
-
-#         try:
-#             t = yf.Ticker(ticker)
-#             df = t.get_earnings_dates(limit=10)
-
-#             if df is None or df.empty:
-#                 print("⚠️ No earnings data")
-#                 continue
-
-#             df = df.reset_index()
-
-#             # Prefer future earnings, fallback to latest
-#             future = df[df["Earnings Date"] >= pd.Timestamp.utcnow()]
-#             row = future.iloc[0] if not future.empty else df.iloc[0]
-
-#             earnings_date = pd.to_datetime(row["Earnings Date"]).date()
-#             eps_est = row.get("EPS Estimate")
-#             eps_rep = row.get("Reported EPS")
-
-#             rows.append({
-#                 "ticker": ticker,
-#                 "earnings_date": earnings_date,
-#                 "estimated_eps": round(eps_est, 2) if pd.notna(eps_est) else None,
-#                 "actual_eps": round(eps_rep, 2) if pd.notna(eps_rep) else None,
-#             })
-
-#             print(f"✓ {earnings_date}")
-
-#         except Exception as e:
-#             print(f"✗ Error: {str(e)[:80]}")
-
-#     return rows
-
-
-# # --------------------------------------------------
-# # Transform + Load
-# # --------------------------------------------------
-# def transform_and_load(earnings_rows):
-#     if not earnings_rows:
-#         print("\n⚠️ No earnings data fetched")
-#         return 0
-
-#     conn = get_connection()
-#     cur = conn.cursor()
-
-#     # Fetch stock_id + currency from DB (authoritative)
-#     cur.execute("""
-#         SELECT stock_id, ticker, currency_code
-#         FROM ingest_db.stocks
-#     """)
-#     stock_map = {
-#         ticker: (stock_id, currency)
-#         for stock_id, ticker, currency in cur.fetchall()
-#     }
-
-#     records = []
-
-#     for row in earnings_rows:
-#         ticker = row["ticker"]
-
-#         if ticker not in stock_map:
-#             print(f"⚠️ Skipping {ticker} (not in stocks table)")
-#             continue
-
-#         stock_id, currency = stock_map[ticker]
-
-#         market_cap = fetch_market_cap_fmp(ticker)
-#         if market_cap is None:
-#             market_cap = fetch_market_cap_yf(ticker)
-
-#         records.append((
-#             stock_id,
-#             ticker,
-#             market_cap,
-#             row["earnings_date"],
-#             row["estimated_eps"],
-#             row["actual_eps"],
-#             currency
-#         ))
-
-#     if not records:
-#         print("\n⚠️ No valid rows to insert")
-#         return 0
-
-#     print(f"\n📥 Inserting {len(records)} rows into ingest_db.stocks_upcoming_earnings")
-
-#     insert_sql = """
-#         INSERT INTO ingest_db.stocks_upcoming_earnings (
-#             stock_id,
-#             ticker,
-#             market_cap,
-#             earnings_date,
-#             estimated_eps,
-#             actual_eps,
-#             currency_code
-#         )
-#         VALUES (%s, %s, %s, %s, %s, %s, %s)
-#         ON CONFLICT DO NOTHING
-#     """
-
-#     cur.executemany(insert_sql, records)
-#     conn.commit()
-
-#     cur.close()
-#     conn.close()
-
-#     return len(records)
-
-
-# # --------------------------------------------------
-# # Main
-# # --------------------------------------------------
-# def main():
-#     print("\n" + "=" * 60)
-#     print("FETCHING: Upcoming Earnings")
-#     print("=" * 60)
-
-#     earnings = fetch_upcoming_earnings()
-#     inserted = transform_and_load(earnings)
-
-#     print("\n✅ DONE")
-#     print(f"   Rows processed: {inserted}")
-#     print("=" * 60)
-
-
-# # --------------------------------------------------
-# if __name__ == "__main__":
-#     main()
-
-
-
-
-
-
-
 """
 Fetch earnings calendar data from FMP with Yahoo fallback.
 Populates:
@@ -206,13 +6,14 @@ Populates:
 """
 
 import concurrent.futures
+import csv
 import json
 import logging
 import os
 import sys
 import time
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -233,10 +34,11 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://financialmodelingprep.com/stable"
 EARNINGS_MAX_WORKERS = int(os.environ.get("FMP_EARNINGS_MAX_WORKERS", "10"))
 LOOKAHEAD_DAYS = int(os.environ.get("EARNINGS_LOOKAHEAD_DAYS", "365"))
+WINDOW_DAYS = int(os.environ.get("EARNINGS_WINDOW_DAYS", "7"))
 FMP_SESSION = None
 
 
-def get_tickers() -> list[str]:
+def get_tickers() -> list:
     env_val = os.environ.get("TARGET_TICKERS")
     if env_val:
         return json.loads(env_val)
@@ -255,7 +57,7 @@ def get_session():
     session = requests.Session()
     retry = Retry(
         total=3,
-        backoff_factor=0.4,
+        backoff_factor=0.5,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("GET",),
         raise_on_status=False,
@@ -295,8 +97,12 @@ def clean_number(value):
         return None
 
 
-def is_fiscal_period_like(value):
-    return value is not None and value.month == 12 and value.day == 31
+def upcoming_currency_code(currency_code: str) -> str:
+    """Normalize GBX → GBP; return as-is otherwise."""
+    currency = (currency_code or "").strip().upper()
+    if currency in {"GBP", "GBX"}:
+        return "GBP"
+    return currency_code or ""
 
 
 def is_credible_upcoming_date(value, today, max_date):
@@ -304,23 +110,38 @@ def is_credible_upcoming_date(value, today, max_date):
         return False
     if value < today or value > max_date:
         return False
-    if is_fiscal_period_like(value):
+    if value.month == 12 and value.day == 31:
         return False
     return True
 
 
-def load_target_stocks(tickers):
+def load_target_stocks(tickers=None):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT stock_id, ticker, currency_code, canonical_ticker
-        FROM ingest_db.stocks
-        WHERE ticker = ANY(%s)
-        ORDER BY stock_id
-        """,
-        (tickers,),
-    )
+    if tickers:
+        cur.execute(
+            """
+            SELECT stock_id, ticker, currency_code, canonical_ticker
+            FROM ingest_db.stocks
+            WHERE ticker = ANY(%s)
+            ORDER BY stock_id
+            """,
+            (tickers,),
+        )
+    else:
+        # TICKER_MAPPINGS may be empty if the config DB connection failed at import
+        # time; fall back to loading all non-peer stocks directly from the DB.
+        log.info("TICKER_MAPPINGS empty — loading all non-peer stocks from DB directly")
+        cur.execute(
+            """
+            SELECT stock_id, ticker, currency_code, canonical_ticker
+            FROM ingest_db.stocks
+            WHERE COALESCE(is_peer, false) = false
+              AND ticker IS NOT NULL
+              AND BTRIM(ticker) <> ''
+            ORDER BY stock_id
+            """
+        )
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -335,7 +156,27 @@ def load_target_stocks(tickers):
     ]
 
 
-def fetch_fmp_calendar_rows(start_date, end_date):
+def build_symbol_map(stocks):
+    """Map normalized symbols to stocks via ticker + canonical_ticker; skip ambiguous symbols."""
+    candidates = defaultdict(list)
+    for stock in stocks:
+        for symbol in (stock["ticker"], stock.get("canonical_ticker")):
+            normalized = normalize_symbol(symbol)
+            if not normalized:
+                continue
+            candidates[normalized].append(stock)
+    return {
+        symbol: stock_list[0]
+        for symbol, stock_list in candidates.items()
+        if len({s["stock_id"] for s in stock_list}) == 1
+    }
+
+
+# ---------------------------------------------------------------------------
+# FMP calendar fetch — windowed + auto-bisect + deduplication
+# ---------------------------------------------------------------------------
+
+def _fetch_fmp_window(start_date, end_date):
     try:
         response = get_session().get(
             f"{BASE_URL}/earnings-calendar",
@@ -344,35 +185,103 @@ def fetch_fmp_calendar_rows(start_date, end_date):
                 "to": end_date.isoformat(),
                 "apikey": fmp_key(),
             },
-            timeout=45,
+            timeout=60,
         )
         response.raise_for_status()
         data = response.json()
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            raise ValueError("FMP earnings-calendar response was not a JSON list")
+        return data
     except Exception as exc:
-        log.warning("FMP earnings calendar fetch failed: %s", exc)
+        log.warning("FMP earnings calendar fetch failed for %s..%s: %s", start_date, end_date, exc)
         return []
 
 
-def index_fmp_calendar(rows, today, max_date):
-    by_symbol = defaultdict(list)
-    for row in rows:
-        symbol = normalize_symbol(row.get("symbol"))
-        event_date = as_date(row.get("date"))
-        if not symbol or not is_credible_upcoming_date(event_date, today, max_date):
-            continue
-        by_symbol[symbol].append(
-            {
-                "date": event_date,
-                "estimated_eps": clean_number(row.get("epsEstimated")),
-                "actual_eps": clean_number(row.get("epsActual")),
-                "source": "fmp_earnings_calendar",
-            }
-        )
-    for symbol in by_symbol:
-        by_symbol[symbol].sort(key=lambda item: item["date"])
-    return by_symbol
+def fetch_fmp_calendar_rows(start_date, end_date, window_days=7):
+    """
+    Fetch FMP earnings calendar in rolling windows.
+    Auto-bisects any window that hits the 4 000-row cap to prevent silent truncation.
+    Deduplicates rows across windows via a content-hash key.
+    """
+    rows = []
+    seen: set = set()
 
+    def add_rows(new_rows):
+        for row in new_rows:
+            key = (
+                row.get("symbol"),
+                row.get("date"),
+                row.get("epsActual"),
+                row.get("epsEstimated"),
+                row.get("revenueActual"),
+                row.get("revenueEstimated"),
+                row.get("lastUpdated"),
+            )
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
+
+    def fetch_range(range_start, range_end):
+        window_rows = _fetch_fmp_window(range_start, range_end)
+        if len(window_rows) >= 4000 and range_start < range_end:
+            midpoint = range_start + ((range_end - range_start) // 2)
+            log.warning(
+                "FMP returned %d rows for %s..%s — splitting at %s",
+                len(window_rows), range_start, range_end, midpoint,
+            )
+            fetch_range(range_start, midpoint)
+            fetch_range(midpoint + timedelta(days=1), range_end)
+            return
+        if len(window_rows) >= 4000:
+            log.warning(
+                "FMP returned %d rows for single-day window %s — response may still be capped",
+                len(window_rows), range_start,
+            )
+        add_rows(window_rows)
+        log.info(
+            "FMP: %d row(s) for %s..%s — cumulative unique=%d",
+            len(window_rows), range_start, range_end, len(rows),
+        )
+
+    cursor = start_date
+    while cursor <= end_date:
+        window_end = min(cursor + timedelta(days=window_days - 1), end_date)
+        fetch_range(cursor, window_end)
+        cursor = window_end + timedelta(days=1)
+    return rows
+
+
+def index_fmp_calendar(fmp_rows, symbol_map, today, max_date):
+    """
+    Match FMP rows to stocks via symbol_map (ticker + canonical_ticker).
+    Returns dict[stock_id -> earliest credible upcoming entry].
+    """
+    best: dict = {}
+    for row in fmp_rows:
+        symbol = normalize_symbol(row.get("symbol"))
+        stock = symbol_map.get(symbol)
+        if not stock:
+            continue
+        event_date = as_date(row.get("date"))
+        if not is_credible_upcoming_date(event_date, today, max_date):
+            continue
+        sid = stock["stock_id"]
+        entry = {
+            "stock": stock,
+            "date": event_date,
+            "estimated_eps": clean_number(row.get("epsEstimated")),
+            "actual_eps": clean_number(row.get("epsActual")),
+            "source": "fmp_earnings_calendar",
+        }
+        current = best.get(sid)
+        if current is None or entry["date"] < current["date"]:
+            best[sid] = entry
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Yahoo fallback (per-ticker, only when FMP has no match)
+# ---------------------------------------------------------------------------
 
 def fetch_yahoo_earnings(stock, today, max_date):
     ticker = stock["ticker"]
@@ -386,14 +295,13 @@ def fetch_yahoo_earnings(stock, today, max_date):
             event_date = as_date(row.get("Earnings Date"))
             if not is_credible_upcoming_date(event_date, today, max_date):
                 continue
-            candidates.append(
-                {
-                    "date": event_date,
-                    "estimated_eps": clean_number(row.get("EPS Estimate")),
-                    "actual_eps": clean_number(row.get("Reported EPS")),
-                    "source": "yfinance_earnings_dates",
-                }
-            )
+            candidates.append({
+                "stock": stock,
+                "date": event_date,
+                "estimated_eps": clean_number(row.get("EPS Estimate")),
+                "actual_eps": clean_number(row.get("Reported EPS")),
+                "source": "yfinance_earnings_dates",
+            })
         if not candidates:
             return None
         candidates.sort(key=lambda item: item["date"])
@@ -402,6 +310,10 @@ def fetch_yahoo_earnings(stock, today, max_date):
         log.warning("Yahoo earnings fetch failed for %s: %s", ticker, exc)
         return None
 
+
+# ---------------------------------------------------------------------------
+# Market cap — FMP /profile with cache, Yahoo fallback
+# ---------------------------------------------------------------------------
 
 def fetch_fmp_market_cap(ticker):
     try:
@@ -429,18 +341,50 @@ def fetch_yahoo_market_cap(ticker):
         return None
 
 
-def fetch_market_cap(ticker):
-    market_cap = fetch_fmp_market_cap(ticker)
-    if market_cap is not None:
-        return market_cap
-    return fetch_yahoo_market_cap(ticker)
+def enrich_market_caps(results):
+    """
+    Fetch market caps sequentially with a shared cache.
+    Tries ticker then canonical_ticker via FMP; falls back to Yahoo.
+    """
+    cache: dict = {}
+    counters: Counter = Counter()
+    enriched = []
+    for row in results:
+        if not row.get("earnings_date"):
+            enriched.append(row)
+            continue
+        market_cap = None
+        ticker = row["ticker"]
+        canonical = row.get("canonical_ticker")
+        for symbol in filter(None, [ticker, canonical]):
+            key = normalize_symbol(symbol)
+            if key not in cache:
+                cache[key] = fetch_fmp_market_cap(symbol)
+            if cache[key] is not None:
+                market_cap = cache[key]
+                break
+        if market_cap is None:
+            market_cap = fetch_yahoo_market_cap(ticker)
+            if market_cap is not None:
+                counters["market_cap_from_yahoo"] += 1
+            else:
+                counters["market_cap_missing"] += 1
+        else:
+            counters["market_cap_from_fmp"] += 1
+        enriched.append({**row, "market_cap": market_cap})
+    counters["market_cap_profile_requests"] = len(cache)
+    return enriched, counters
 
 
-def resolve_stock_earnings(stock, fmp_index, today, max_date):
-    symbol = normalize_symbol(stock["ticker"])
-    fmp_match = (fmp_index.get(symbol) or [None])[0]
-    yahoo_match = None if fmp_match else fetch_yahoo_earnings(stock, today, max_date)
-    chosen = fmp_match or yahoo_match
+# ---------------------------------------------------------------------------
+# Concurrent earnings resolution (Yahoo fallback only when FMP misses)
+# ---------------------------------------------------------------------------
+
+def resolve_stock_earnings(stock, fmp_best, today, max_date):
+    sid = stock["stock_id"]
+    chosen = fmp_best.get(sid)
+    if not chosen:
+        chosen = fetch_yahoo_earnings(stock, today, max_date)
     if not chosen:
         return {
             **stock,
@@ -457,15 +401,19 @@ def resolve_stock_earnings(stock, fmp_index, today, max_date):
         "earnings_date": chosen["date"],
         "estimated_eps": chosen["estimated_eps"],
         "actual_eps": chosen["actual_eps"],
-        "market_cap": fetch_market_cap(stock["ticker"]),
+        "market_cap": None,
         "reason_not_inserted": None,
     }
 
 
-def resolve_all_earnings(stocks, fmp_index, today, max_date):
+def resolve_all_earnings(stocks, fmp_best, today, max_date):
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(EARNINGS_MAX_WORKERS, max(1, len(stocks)))) as executor:
-        futures = {executor.submit(resolve_stock_earnings, stock, fmp_index, today, max_date): stock for stock in stocks}
+    workers = min(EARNINGS_MAX_WORKERS, max(1, len(stocks)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(resolve_stock_earnings, stock, fmp_best, today, max_date): stock
+            for stock in stocks
+        }
         for index, future in enumerate(concurrent.futures.as_completed(futures), 1):
             stock = futures[future]
             try:
@@ -483,16 +431,17 @@ def resolve_all_earnings(stocks, fmp_index, today, max_date):
             results.append(row)
             log.info(
                 "[%s/%s] %s source=%s date=%s eps=%s",
-                index,
-                len(stocks),
-                row["ticker"],
-                row["source"],
-                row["earnings_date"],
-                row["estimated_eps"],
+                index, len(stocks),
+                row["ticker"], row["source"],
+                row["earnings_date"], row["estimated_eps"],
             )
-            time.sleep(float(DATA_FETCH_CONFIG.get("rate_limit_delay", 0.3)) / max(1, EARNINGS_MAX_WORKERS))
+            time.sleep(float(DATA_FETCH_CONFIG.get("rate_limit_delay", 0.3)) / max(1, workers))
     return sorted(results, key=lambda item: item["stock_id"])
 
+
+# ---------------------------------------------------------------------------
+# DB rows builder
+# ---------------------------------------------------------------------------
 
 def build_rows(results):
     upcoming_rows = []
@@ -500,26 +449,69 @@ def build_rows(results):
     for row in results:
         if not row.get("earnings_date"):
             continue
-        upcoming_rows.append(
-            (
-                row["stock_id"],
-                row["ticker"],
-                row["market_cap"],
-                row["earnings_date"],
-                row["estimated_eps"],
-                row["actual_eps"],
-                row["currency_code"],
-                row["canonical_ticker"],
-            )
-        )
+        upcoming_rows.append((
+            row["stock_id"],
+            row["ticker"],
+            row["market_cap"],
+            row["earnings_date"],
+            row["estimated_eps"],
+            row["actual_eps"],
+            upcoming_currency_code(row.get("currency_code", "")),
+            row.get("canonical_ticker"),
+        ))
         calendar_rows.append((row["stock_id"], row["earnings_date"], row["source"]))
     return calendar_rows, upcoming_rows
 
 
-def load_earnings_rows(stock_ids, calendar_rows, upcoming_rows, dry_run=False):
-    if dry_run:
-        return {"calendar_inserted": 0, "upcoming_deleted": 0, "upcoming_upserted": 0}
-    conn = get_connection()
+# ---------------------------------------------------------------------------
+# Audit CSV output
+# ---------------------------------------------------------------------------
+
+def write_audit_files(audit_dir: Path, results, summary):
+    audit_dir.mkdir(parents=True, exist_ok=True)
+
+    matched_fields = [
+        "stock_id", "ticker", "canonical_ticker", "currency_code",
+        "source", "earnings_date", "estimated_eps", "actual_eps", "market_cap",
+    ]
+    with (audit_dir / "matched_upcoming_earnings.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=matched_fields)
+        writer.writeheader()
+        writer.writerows([
+            {k: row.get(k) for k in matched_fields}
+            for row in results if row.get("earnings_date")
+        ])
+
+    missing_fields = ["stock_id", "ticker", "canonical_ticker", "reason_not_inserted"]
+    with (audit_dir / "stocks_without_earnings.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=missing_fields)
+        writer.writeheader()
+        writer.writerows([
+            {k: row.get(k) for k in missing_fields}
+            for row in results if not row.get("earnings_date")
+        ])
+
+    (audit_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
+    log.info("Audit files written to %s", audit_dir)
+
+
+# ---------------------------------------------------------------------------
+# DB load
+# ---------------------------------------------------------------------------
+
+def _connect_with_retry(max_attempts=3, delay=3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return get_connection()
+        except Exception as exc:
+            if attempt == max_attempts:
+                raise
+            log.warning("DB connection attempt %d/%d failed: %s — retrying in %ds", attempt, max_attempts, exc, delay)
+            time.sleep(delay)
+
+
+def load_earnings_rows(stock_ids, calendar_rows, upcoming_rows):
+    conn = _connect_with_retry()
     cur = conn.cursor()
     try:
         cur.execute(
@@ -584,32 +576,50 @@ def load_earnings_rows(stock_ids, calendar_rows, upcoming_rows, dry_run=False):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     started = time.perf_counter()
     today = datetime.now(timezone.utc).date()
     max_date = today + timedelta(days=LOOKAHEAD_DAYS)
+
     tickers = get_tickers()
-    stocks = load_target_stocks(tickers)
+    stocks = load_target_stocks(tickers or None)
     if not stocks:
         return {"status": "success", "tickers_processed": 0, "records_inserted": 0}
+
     log.info("Fetching earnings for %s stocks from %s to %s", len(stocks), today, max_date)
-    fmp_rows = fetch_fmp_calendar_rows(today, max_date)
-    fmp_index = index_fmp_calendar(fmp_rows, today, max_date)
-    results = resolve_all_earnings(stocks, fmp_index, today, max_date)
+
+    symbol_map = build_symbol_map(stocks)
+    fmp_rows = fetch_fmp_calendar_rows(today, max_date, window_days=WINDOW_DAYS)
+    log.info("Fetched %d FMP earnings-calendar row(s) total", len(fmp_rows))
+
+    allow_empty = os.environ.get("ALLOW_EMPTY_FMP", "false").lower() == "true"
+    if not fmp_rows and not allow_empty:
+        log.warning("FMP returned zero rows — aborting to avoid wiping existing upcoming earnings")
+        return {"status": "aborted", "reason": "fmp_returned_zero_rows"}
+
+    fmp_best = index_fmp_calendar(fmp_rows, symbol_map, today, max_date)
+
+    results = resolve_all_earnings(stocks, fmp_best, today, max_date)
+    results, market_cap_counters = enrich_market_caps(results)
+
     calendar_rows, upcoming_rows = build_rows(results)
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+
     load_result = load_earnings_rows(
         [stock["stock_id"] for stock in stocks],
         calendar_rows,
         upcoming_rows,
-        dry_run=dry_run,
     )
+
     source_counts = Counter(row["source"] for row in results)
     summary = {
         "status": "success",
-        "dry_run": dry_run,
         "tickers_processed": len(stocks),
         "provider_source_counts": dict(source_counts),
+        "market_cap_counters": dict(market_cap_counters),
         "calendar_rows_ready": len(calendar_rows),
         "upcoming_rows_ready": len(upcoming_rows),
         "rows_with_estimated_eps": sum(1 for row in upcoming_rows if row[4] is not None),
@@ -617,6 +627,12 @@ def main():
         "elapsed_seconds": round(time.perf_counter() - started, 2),
         **load_result,
     }
+
+    audit_dir = Path(
+        os.environ.get("EARNINGS_AUDIT_DIR")
+        or f"output/earnings_refresh/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    write_audit_files(audit_dir, results, summary)
     log.info("Earnings ingestion summary: %s", json.dumps(summary, default=str))
     return summary
 
