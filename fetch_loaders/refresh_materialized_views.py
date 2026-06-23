@@ -32,6 +32,11 @@ REFRESH_QUERIES = [
         "mv_stocks_price_volatility",
         "SELECT semantic_db.refresh_mv_concurrently('semantic_db','mv_stocks_price_volatility');"
     ),
+    (
+        "mv_stocks_price_data_latest",
+        "SELECT semantic_db.refresh_mv_concurrently('semantic_db','mv_stocks_price_data_latest');"
+    ),
+    
 ]
 
 def refresh_materialized_views():
